@@ -88,9 +88,6 @@ void InitThread() {
     LogMessage("RSDWRestAPI " + std::string(Runtime::Version()) + " loaded");
     LogMessage("RSDWRestAPI: data directory " + GetBaseDir());
 
-    StartListeners();
-    atexit(&ShutdownListeners);
-
     if (!g_Config.rest.enabled && !g_Config.rcon.enabled) {
         LogMessage("RSDWRestAPI: both listeners are disabled, nothing to do");
         return;
@@ -113,6 +110,13 @@ void InitThread() {
     }
 
     if (!g_Shutdown && DomEngine::g_Engine->IsInitialized()) {
+        // Patch (MIT, usage privé) : les listeners ne démarrent QUE dans le
+        // processus où le moteur du jeu s'est initialisé. Sous LD_PRELOAD
+        // appliqué à tout le service (wrapper .sh, helpers), le premier
+        // processus à se lier au port REST serait sinon un processus SANS
+        // moteur — /api/health répondrait engineReady=false pour toujours.
+        StartListeners();
+        atexit(&ShutdownListeners);
         LogMessage("RSDWRestAPI: engine ready, endpoints are live");
 
         NativeCall::LogImageSymbolReport();
@@ -209,6 +213,9 @@ void InitThread() {
             }
             wasDead.swap(nowDead);
         }
+    } else if (!g_Shutdown) {
+        LogMessage(
+            "RSDWRestAPI: engine never initialized in this process, listeners skipped");
     }
 }
 
