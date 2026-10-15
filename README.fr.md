@@ -1,103 +1,115 @@
 # 🐉 RSDWServerAPI
 
-[![Licence : MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.6-blue.svg)](#-compatibilité)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](#-compatibilité)
 [![Jeu](https://img.shields.io/badge/jeu-RuneScape%3A%20Dragonwilds%201.0.1-orange.svg)](#-compatibilité)
 [![Moteur](https://img.shields.io/badge/moteur-UE%205.6.1-purple.svg)](#-compatibilité)
 
-> 🇬🇧 [English version](README.md)
+## 🧭 À propos
 
-API d'administration pour les serveurs dédiés **RuneScape: Dragonwilds** sous Linux.
+**RSDWServerAPI** transforme un serveur dédié **RuneScape: Dragonwilds** Linux
+standard en serveur administrable à distance. Il injecte un plan de contrôle
+complet dans le processus du jeu en cours d'exécution :
 
-Elle injecte une API REST, un écouteur Source RCON, des commandes admin en jeu et un
-relais Discord optionnel dans un serveur en cours d'exécution — pour voir qui est
-connecté, lire leurs statistiques en direct, les téléporter, les soigner, les expulser
-ou les bannir à distance : depuis un panneau, un script, un bot Discord ou tout ce qui
-parle HTTP.
+- 🌐 une **API REST** (stats joueurs en direct, téléportations, soins, dons, kicks, bans…),
+- 💬 un écouteur **Source RCON** pour les outils et panneaux,
+- 🎮 des **commandes admin en jeu** (`/kick`, `/ban`, `/give`…) pour owners/admins,
+- 📣 un **relais Discord** optionnel (chat + annonces de morts comiques).
 
-> 💡 Ce fork porte les correctifs durcis en production et les offsets du build 1.0.1
-> (branche `fix/engine-ready-listeners-and-header-case`, voir la
-> [PR #3](https://github.com/dkoz/RSDWServerAPI/pull/3) en amont).
+Il pilote toute la boucle d'administration — depuis un panneau, un script, un
+bot Discord (le plugin compagnon
+[`dkbot-dragonwilds`](https://github.com/ApachaiZ/dkbot-dragonwilds)), ou tout
+programme qui parle HTTP.
 
-## 🚀 TL;DR — démarrage en 5 minutes
+> ⭐ **Ceci est un fork** du projet original de **dkoz** —
+> **[dkoz/RSDWServerAPI](https://github.com/dkoz/RSDWServerAPI)** — sans qui
+> rien de tout cela n'existerait.
+>
+> 🙏 **Un immense merci au développeur original** pour les fondations solides,
+> l'architecture propre (découverte validée, marshalling des appels natifs) et
+> la licence MIT qui permet à ce fork de construire dessus. Le fork ajoute des
+> correctifs durcis pour la production, les offsets du build 1.0.1 et des
+> fonctionnalités admin supplémentaires (téléportation, tell, heal, feed,
+> hydrate, god mode). Les contributions amont y restent bienvenues.
+>
+> 🌐 Langues : 🇬🇧 [English version](README.md) · 🇫🇷 Français · 🇩🇪 [Deutsche Version](README.de.md) · 🇪🇸 [Versión española](README.es.md)
+
+## 🚀 TL;DR — mise en place en 5 minutes
 
 ```bash
-# 1. Compiler (Docker ou make)
+# 1. Build (Docker ou make)
 ./build.sh                          # → dist/librsdwapi.so
 
 # 2. Copier à côté du serveur, préfixer la commande de lancement
 LD_PRELOAD=./librsdwapi.so ./RSDragonwilds/Binaries/Linux/RSDragonwildsServer-Linux-Shipping -log -port=7777
 
-# 3. Au premier démarrage, le mod écrit rsdwapi/settings.ini à côté du binaire.
-#    L'API REST est ACTIVÉE par défaut (port 8080), RCON DÉSACTIVÉ.
+# 3. Au premier lancement le mod écrit rsdwapi/settings.ini à côté du binaire.
+#    L'API REST est ACTIVÉE par défaut (port 8080), RCON désactivé.
 
-# 4. Vérifier que ça tourne
+# 4. Vérifier que ça marche
 curl http://127.0.0.1:8080/api/health
 # → {"status":"healthy","engineReady":true}
 ```
 
-> 🔐 **Avant d'exposer quoi que ce soit** : mettez `BindAddress=127.0.0.1`
-> et un `BearerToken` dans `settings.ini` (puis envoyez
+> 🔐 **Avant toute exposition** : mettez `BindAddress=127.0.0.1` et un
+> `BearerToken` dans `settings.ini` (puis envoyez
 > `Authorization: Bearer <token>`). Voir [🔒 Sécurité](#-sécurité).
 
 ## 🧭 Comment ça marche, en un paragraphe
 
-Ce mod est une **bibliothèque partagée injectée dans le processus du jeu**
-au démarrage (`LD_PRELOAD`). Elle attend que le moteur Unreal démarre,
-localise les globales du moteur (pool de noms, liste d'objets, monde — avec
-des scans de secours validés), puis expose en HTTP les données du jeu en
-direct et des actions d'administration. Elle ne modifie jamais les fichiers
-du jeu, ne touche jamais aux sauvegardes, et ne lit qu'à travers des
-pointeurs validés : un patch du jeu se dégrade en `503` + une ligne de log,
-pas en crash. Le processus de jeu reste par ailleurs identique — c'est le
-même binaire qui fait tourner le serveur.
+Ce mod est une **bibliothèque partagée injectée dans le processus du jeu** au démarrage
+(`LD_PRELOAD`). Il attend que le moteur Unreal soit prêt, localise les globales du
+moteur (pool de noms, liste d'objets, monde — avec des scans de repli validés), puis
+sert les données de jeu en direct et les actions admin par HTTP. Il ne modifie jamais
+les fichiers du jeu, ne touche jamais aux sauvegardes, et ne lit qu'à travers des
+pointeurs validés : un patch du jeu se dégrade en un `503` + une ligne de log, pas en
+un crash. Le processus du jeu reste inchangé par ailleurs — le même binaire fait
+tourner le serveur comme avant.
 
 ---
 
 ## 📦 Compatibilité
 
-Vérifié en production sur un serveur dédié Linux (Ubuntu, systemd + `LD_PRELOAD`).
+Vérifié en direct sur un serveur dédié de production (Ubuntu, systemd + `LD_PRELOAD`).
 
-| Version du jeu | Build (CL) | Build Steam | Dépôt Linux | État |
+| Version du jeu | Build (CL) | Build Steam | Depot Linux | Statut |
 |---|---|---|---|---|
 | 1.0.0.x | 247725 (`++dominion+hotfix`) | — | — | ✅ vérifié (offsets SDK) |
-| **1.0.1** « Eye on Ashenfall » | **248854** (`++dominion+staging`) | **25811348** | **3501791** | ✅ vérifié (offsets mis à jour) |
+| **1.0.1** "Eye on Ashenfall" | **248854** (`++dominion+staging`) | **25811348** | **3501791** | ✅ vérifié (offsets mis à jour) |
 
 - Moteur : **UE 5.6.1** — inchangé entre les deux builds ci-dessus.
-- Plateforme : serveur dédié Linux (`RSDragonwildsServer-Linux-Shipping`, base d'image
-  `0x200000`, binaire strippé : pas de `.symtab`, `UObject::ProcessEvent` non exporté).
+- Plateforme : serveur dédié Linux (`RSDragonwildsServer-Linux-Shipping`, image de base
+  `0x200000`, strippé : pas de `.symtab`, `UObject::ProcessEvent` non exporté).
 
 ## ✨ Fonctionnalités
 
-- 📡 **Données joueurs en direct** — noms, GUID de personnage, plateforme, ping,
-  position, rotation, vélocité, santé, faim, soif, chaque compétence avec son XP,
-  chaque attribut flottant.
-- 🚪 **Expulsion à distance** via la fonction de kick du jeu, persistante jusqu'au
-  redémarrage.
-- 📢 **Diffusion** et 💬 **message privé** via le chat du jeu lui-même.
-- 🎁 **Don d'objets** via la fonction de don du jeu.
-- 🔨 **Bannissements** qui survivent aux redémarrages, joueurs hors-ligne bannissables
-  par SteamID64.
-- 🌀 **Téléportation** — joueur vers joueur, ou vers des coordonnées — via la native
-  `K2_TeleportTo` du jeu sur le game thread (acquittée par le moteur, répliquée).
-- 💚 **Actions d'admin** — soin (native `IncreaseHealth`), nourrir, hydrater, god mode.
-- 🎮 **Commandes admin en jeu** — `/kick`, `/ban`, `/unban`, `/give`, contrôlées par la
-  liste owner/admin du jeu.
-- 📣 **Relais Discord** — chat du jeu et morts des joueurs postés sur des webhooks.
-- 🔌 **Deux écouteurs indépendants** — REST et Source RCON, activables séparément.
-- 🔐 **Contrôle d'accès sur les deux** — bearer token ou mot de passe RCON, whitelist
-  d'IP, limitation de débit par adresse et blocage automatique après échecs répétés.
+- 📡 **Données joueurs en direct** — noms, GUID de personnage, plateforme, ping, position,
+  rotation, vélocité, santé, sustenance, hydratation, chaque compétence avec XP, chaque
+  attribut flottant.
+- 🚪 **Kick à distance** via la propre fonction de kick du jeu, réappliqué tant que le
+  serveur tourne.
+- 📢 **Broadcast** et 💬 **tell privé** via le propre chat du jeu.
+- 🎁 **Don d'objets** via la propre fonction de give du jeu.
+- 🔨 **Bans** qui survivent aux redémarrages, joueurs hors ligne bannissables par SteamID64.
+- 🌀 **Téléportation** — joueur sur joueur, ou vers des coordonnées — via le
+  `K2_TeleportTo` natif du jeu sur le thread de jeu (reconnu par le moteur, répliqué).
+- 💚 **Actions admin** — heal (`IncreaseHealth` natif), feed, hydrate, god mode.
+- 🎮 **Commandes admin en jeu** — `/kick`, `/ban`, `/unban`, `/give`, conditionnées à la
+  propre liste owner/admin du jeu.
+- 📣 **Relais Discord** — chat du jeu et morts de joueurs postés vers des webhooks.
+- 🔌 **Deux écouteurs indépendants** — REST et Source RCON, chacun activable séparément.
+- 🔐 **Contrôle d'accès sur les deux** — bearer token ou mot de passe RCON, liste
+  blanche d'IP, rate limiting par adresse et blocage automatique après échecs répétés.
 - 🛡️ **Offsets validés à l'exécution** — chaque étape de découverte est vérifiée et
-  contre-vérifiée avant toute lecture ; après un patch du jeu, une incohérence se
-  dégrade en `503` + une ligne de log plutôt que de servir n'importe quoi.
+  contre-vérifiée avant toute lecture ; une discordance après un patch du jeu se
+  dégrade en `503` et une ligne de log plutôt que de servir n'importe quoi.
 
 ## 🚀 Démarrage rapide
 
-### Compilation
+### Build
 
-Docker est la seule exigence. Le conteneur de build est Debian bookworm, aligné sur
-l'image du serveur dédié : le résultat ne demande jamais une glibc plus récente que
-celle de l'hôte. `libstdc++` et `libgcc` sont liées statiquement.
+Docker est la seule exigence. Le conteneur de build est Debian bookworm, identique à
+l'image dans laquelle tourne le serveur dédié, donc le résultat ne réclame jamais une
+glibc plus récente que celle de l'hôte. `libstdc++` et `libgcc` sont liés statiquement.
 
 ```bash
 ./build.sh
@@ -106,7 +118,7 @@ celle de l'hôte. `libstdc++` et `libgcc` sont liées statiquement.
 Sortie : `dist/librsdwapi.so`.
 
 Un simple `make` fonctionne aussi avec une toolchain locale ; sur les hôtes sans
-`libstdc++` statique (Fedora, …), retirez les drapeaux statiques :
+`libstdc++` statique (Fedora…), retirez les flags statiques :
 
 ```bash
 make LDFLAGS="-shared -pthread -ldl"
@@ -115,18 +127,18 @@ make LDFLAGS="-shared -pthread -ldl"
 ### Installation
 
 Copiez `dist/librsdwapi.so` à la racine du serveur et préfixez la commande de
-démarrage :
+lancement :
 
 ```bash
 LD_PRELOAD=./librsdwapi.so ./RSDragonwilds/Binaries/Linux/RSDragonwildsServer-Linux-Shipping -log -port=7777
 ```
 
-### systemd (montage de production)
+### systemd (mise en place production)
 
-Le drop-in ci-dessous est celui qui tourne en production : `LD_PRELOAD` est appliqué à
-tout le service (le script lanceur *et* le binaire du jeu sont injectés — sans danger,
-voir [🏗️ Fonctionnement](#-fonctionnement)), et le répertoire de données est fixé avec
-`RSDWAPI_DIR` :
+Le drop-in ci-dessous est ce qui tourne en production : `LD_PRELOAD` s'applique à tout
+le service (le script de lancement *et* le binaire du jeu sont injectés — sans danger,
+voir [🏗️ Comment ça marche](#️-comment-ça-marche)), et le dossier de données est fixé
+avec `RSDWAPI_DIR` :
 
 ```ini
 # /etc/systemd/system/dragonwilds.service.d/rsdwapi.conf
@@ -135,36 +147,37 @@ Environment=RSDWAPI_DIR=/home/steam/dragonwilds_linux_server/rsdwapi
 Environment=LD_PRELOAD=/home/steam/dragonwilds_linux_server/librsdwapi.so
 ```
 
-Sur Pterodactyl ou Pelican, placez le `.so` à la racine du serveur et réglez le
-démarrage ainsi :
+Sur Pterodactyl ou Pelican, mettez le `.so` à la racine du serveur et réglez le
+démarrage sur :
 
 ```
 LD_PRELOAD=/home/container/librsdwapi.so ./RSDragonwilds/Binaries/Linux/RSDragonwildsServer-Linux-Shipping -log -port={{SERVER_PORT}} -ini:Game:[/Script/Engine.GameSession]:MaxPlayers={{MAX_PLAYERS}}
 ```
 
-Allouez le port API (et le port RCON si vous l'activez) dans le panneau.
+Allouez le port de l'API (et le port RCON, si vous l'activez) dans le panneau.
 
 ## ⚙️ Configuration
 
-Au premier démarrage, le mod écrit `rsdwapi/settings.ini` à côté du binaire du serveur
+Au premier lancement, le mod écrit `rsdwapi/settings.ini` à côté du binaire du serveur
 (`RSDragonwilds/Binaries/Linux/rsdwapi/` sur une installation standard). Utilisez
-`RSDWAPI_DIR` pour le placer ailleurs. Le fichier est relu au démarrage du serveur.
+`RSDWAPI_DIR` pour le mettre à un endroit plus accessible. Le fichier est relu au
+démarrage du serveur.
 
-Un bearer token et un mot de passe RCON sont générés à ce premier démarrage et ne sont
-jamais régénérés ensuite — une valeur vide reste vide.
+Un bearer token et un mot de passe RCON sont générés au premier lancement et ne sont
+plus jamais régénérés — une valeur vide reste vide.
 
 **L'API REST est activée par défaut. RCON est désactivé par défaut.**
 
 ```ini
 [General]
 EnableLogging=true        # étapes de découverte + chaque requête
-VerboseLogging=true       # détail des scans ; laisser sauf si trop verbeux
+VerboseLogging=true       # détail des scans supplémentaires ; laissez actif sauf si bruyant
 
 [API]
 Enabled=true
-BindAddress=0.0.0.0       # 🔒 préférer 127.0.0.1 + un token en production
+BindAddress=0.0.0.0       # 🔒 préférez 127.0.0.1 + un token en production
 Port=8080
-BearerToken=              # vide = aucune authentification (déconseillé)
+BearerToken=              # vide = aucune auth du tout (déconseillé)
 IPWhitelist=              # IPs / CIDR séparés par des virgules ; vide = tout le monde
 
 [RCON]
@@ -182,7 +195,7 @@ MaxConnections=16
 
 [Discord]
 Enabled=false
-WebhookUrl=               # relais du chat
+WebhookUrl=               # relais chat
 DeathWebhookUrl=          # morts ; retombe sur WebhookUrl si vide
 Username=Dragonwilds
 ```
@@ -190,11 +203,11 @@ Username=Dragonwilds
 ## 🌐 API REST
 
 Tous les endpoints vivent sous `/api/`. Quand un bearer token est configuré, envoyez
-`Authorization: Bearer <token>` (les noms d'en-têtes sont insensibles à la casse —
+`Authorization: Bearer <token>` (les noms d'en-tête sont insensibles à la casse —
 reqwest/hyper les mettent en minuscules et c'est géré).
 
 - `200` avec `{"status":"ok","message":"…"}` en cas de succès.
-- `401` token manquant/incorrect · `404` route inconnue · `503` moteur pas prêt
+- `401` token manquant/erroné · `404` route inconnue · `503` moteur pas prêt
   (`{"error":"engine not initialised"}`).
 
 ### Lectures
@@ -203,9 +216,9 @@ reqwest/hyper les mettent en minuscules et c'est géré).
 |---|---|
 | `GET /api/hello` | Ping de vie. |
 | `GET /api/health` | `{"status","version","uptimeSeconds","engineReady"}`. |
-| `GET /api/players` | Joueurs connectés, détail complet. Filtres de requête : `name`, `netId`, `characterName`, `characterGuid`. |
-| `GET /api/items` | `{"items":[{"name","maxStackSize"}]}` — tous les objets `ItemData`. |
-| `GET /api/bans` | `{"bans":[{"netId","name","reason","bannedAt"}]}` — bannissements persistants. |
+| `GET /api/players` | Tous les joueurs connectés, détail complet. Filtres de requête optionnels : `name`, `netId`, `characterName`, `characterGuid`. |
+| `GET /api/items` | `{"items":[{"name","maxStackSize"}]}` — chaque objet `ItemData`. |
+| `GET /api/bans` | `{"bans":[{"netId","name","reason","bannedAt"}]}` — bans persistants. |
 | `GET /api/status` | Identité du serveur : `serverName`, `worldName`, `ownerId`, `serverGuid`, `isDedicatedServer`, `crossplayEnabled`, état du monde. |
 
 Entrée de `/api/players` (tous les champs sont optionnels — toutes les plateformes
@@ -229,23 +242,23 @@ n'exposent pas tout) :
 
 ### Actions
 
-Les identifiants de joueur sont comparés à `playerId`, `uniqueNetId`, `characterGuid`,
-`characterName` et `name` — la même chaîne marche partout.
+Les identifiants de joueur sont résolus contre `playerId`, `uniqueNetId`,
+`characterGuid`, `characterName` et `name` — la même chaîne fonctionne partout.
 
 | Route | Corps | Notes |
 |---|---|---|
-| `POST /api/kick` | `{"player","reason"?}` | Kick natif du jeu, ré-appliqué tant que le serveur tourne. |
-| `POST /api/broadcast` | `{"message","sender"?}` | Chat natif du jeu, à tout le monde. |
-| `POST /api/tell` | `{"player","message"}` | Message privé ; nécessite la dérivation de ProcessEvent (voir plus bas). |
-| `POST /api/give` | `{"player","item","count"?}` | `count` vaut 1 par défaut. |
-| `POST /api/ban` | `{"player","reason"?}` | Persistant ; hors-ligne par SteamID64. |
+| `POST /api/kick` | `{"player","reason"?}` | Kick natif du jeu, réappliqué tant que le serveur tourne. |
+| `POST /api/broadcast` | `{"message","sender"?}` | Chat natif du jeu vers tout le monde. |
+| `POST /api/tell` | `{"player","message"}` | Message privé ; requiert la dérivation de ProcessEvent (voir plus bas). |
+| `POST /api/give` | `{"player","item","count"?}` | `count` par défaut à 1. |
+| `POST /api/ban` | `{"player","reason"?}` | Persistant ; joueurs hors ligne par SteamID64. |
 | `POST /api/unban` | `{"player"}` | |
 | `POST /api/teleport` | `{"from","to"}` | Téléporte `from` sur la position de `to`. |
 | `POST /api/tpto` | `{"player","x","y","z"}` | Coordonnées monde absolues (doubles). |
-| `POST /api/heal` | `{"player","amount"?}` | Soin complet par défaut ; `amount` soigne partiellement, borné au max. |
-| `POST /api/feed` | `{"player"}` | Faim → maximum. |
-| `POST /api/hydrate` | `{"player"}` | Soif → maximum. |
-| `POST /api/godmode` | `{"player","enabled"?}` | Bascule `bCanDie` ; `true` par défaut. |
+| `POST /api/heal` | `{"player","amount"?}` | Soin complet par défaut ; `amount` soigne partiellement, plafonné au max. |
+| `POST /api/feed` | `{"player"}` | Sustenance → max. |
+| `POST /api/hydrate` | `{"player"}` | Hydratation → max. |
+| `POST /api/godmode` | `{"player","enabled"?}` | Bascule `bCanDie` ; défaut `true`. |
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" -X POST \
@@ -261,17 +274,17 @@ Pour les joueurs que le jeu considère owner ou admin (`PrivilegeFunctionLibrary
 /kick <joueur> [raison]
 /ban <joueur> [raison]
 /unban <joueur ou SteamID64>
-/give <joueur> <objet> [quantité]
+/give <joueur> <objet> [nombre]
 ```
 
-> ⚠️ La vérification admin se résout paresseusement à la première utilisation : les
-> classes de game features s'enregistrent après le démarrage du mod, un lookup unique
-> peut donc les manquer. C'est géré dans le code — le lookup retente à la première
-> commande au lieu de condamner toute la session.
+> ⚠️ Le contrôle admin se résout paresseusement au premier usage : les classes de
+> game features s'enregistrent après le boot du mod, donc une résolution unique peut
+> les manquer. C'est géré dans le code — la résolution retente à la première commande
+> au lieu de faire échouer tout le lancement.
 
 ## 💬 RCON
 
-RCON Source sur le port configuré (désactivé par défaut). Commandes :
+Source RCON sur le port configuré (désactivé par défaut). Commandes :
 
 ```
 help                      status
@@ -279,62 +292,62 @@ players [json]            player <nom>
 playercount
 kick <joueur> [raison]    ban <joueur> [raison]     unban <joueur|id>
 broadcast <message>       tell <joueur> <message>
-give <joueur> <objet> [quantité]
+give <joueur> <objet> [nombre]
 tp <joueur> <cible>       tpto <joueur> <x> <y> <z>
 heal <joueur>             feed <joueur>             hydrate <joueur>
 godmode <joueur> <on|off>
 ```
 
-## 🏗️ Fonctionnement
+## 🏗️ Comment ça marche
 
-Le mod est une bibliothèque partagée injectée via `LD_PRELOAD`. Son constructeur lance
-un thread d'initialisation qui attend que le moteur du jeu démarre, puis attache les
-lecteurs et les hooks. **Rien n'est lu ni appelé avant que le moteur soit validé.**
+Le mod est un objet partagé injecté avec `LD_PRELOAD`. Son constructeur lance un thread
+d'init qui attend que le moteur du jeu soit prêt, puis attache lecteurs et hooks.
+**Rien n'est lu ni appelé avant que le moteur ne soit validé.**
 
-### 🔍 Découverte (pourquoi les patches ne le font pas crasher)
+### 🔍 Découverte (pourquoi les patches ne le font pas planter)
 
-Les globales UE sont localisées par offsets SDK **et** par scans de secours, chacun
+Les globales UE sont localisées via les offsets SDK **et** des scans de repli, chacun
 validé :
 
-1. `GNames` (le pool de FName) — offset SDK d'abord ; en cas d'échec, chaque segment
-   inscriptible est scanné pour un pool dont la première entrée décode en `None`. Les
-   noms se résolvent depuis ce pool.
+1. `GNames` (le pool FName) — offset SDK d'abord ; en échec, chaque segment
+   inscriptible est scanné pour un pool dont la première entrée se décode en `None`.
+   Les chaînes de noms se résolvent depuis ici.
 2. `GObjects` (le `TUObjectArray`) — offset SDK validé contre la structure de chunks ;
-   sinon scan des segments inscriptibles. Les objets sont parcourus par chunk.
-3. `GWorld` — offset SDK validé (classe `World` + niveau persistant), sinon balayage de
-   `GObjects` pour trouver le `World` vivant.
+   en échec, scan des segments inscriptibles. Les objets sont parcourus par chunk.
+3. `GWorld` — offset SDK validé (classe `World` + niveau persistant), sinon balayage
+   de `GObjects` pour le `World` vivant.
 
 Les noms de classes, les recherches de fonctions et chaque lecture de champ passent par
-des pointeurs validés avec des contrôles de lisibilité — un champ déplacé se dégrade en
+des pointeurs validés avec vérifications de lisibilité — un champ déplacé se dégrade en
 donnée manquante, pas en crash.
 
-Offsets actuels (build 1.0.1 / CL 248854, base d'image `0x200000`) :
+Offsets actuels (build 1.0.1 / CL 248854, image de base `0x200000`) :
 
-| Globale | Relatif | Absolu |
+| Globale | Relative | Absolue |
 |---|---|---|
 | `GNames` | `0x0DBDAFF8` | `0xDDDAFF8` |
 | `GObjects` | `0x0DC96510` | `0xDE96510` |
 | `GWorld` | `0x0DD525F8` | `0xDF525F8` |
 
-### 🧵 Marshalling vers le game thread
+### 🧵 Marshalling sur le thread de jeu
 
-Les fonctions natives UE doivent s'exécuter sur le **game thread**. Le mod ne les
+Les fonctions natives UE doivent s'exécuter sur le **thread de jeu**. Le mod ne les
 appelle jamais depuis son thread HTTP :
 
-- Un pump est installé sur une RPC serveur native (`PlayerController.ServerUpdateCamera`) ;
-  chaque fois qu'un joueur la déclenche, le travail en file (`GameThread::RunSync`) est
-  drainé sur le game thread. C'est ainsi que téléport, soin, dons et kicks s'exécutent
-  nativement.
-- `UObject::ProcessEvent` n'est pas exporté sur les builds Linux Shipping : le mod
-  dérive son adresse à l'exécution (marche de pile + slot de vtable partagé) ; tant que
-  la dérivation n'a pas eu lieu, les fonctionnalités adossées à ProcessEvent (`tell`,
-  `broadcast`) restent désactivées avec un log explicite.
+- Une pompe est installée sur un RPC serveur natif (`PlayerController.ServerUpdateCamera`) ;
+  à chaque déclenchement par un joueur, le travail mis en file avec `GameThread::RunSync`
+  est drainé sur le thread de jeu. C'est ainsi que téléportation, heal, give et kicks
+  s'exécutent nativement.
+- `UObject::ProcessEvent` n'est pas exporté sur les builds Linux Shipping, donc le mod
+  dérive son adresse à l'exécution (parcours de pile + slot de vtable partagé) ; tant
+  qu'elle n'est pas dérivée, les fonctionnalités ProcessEvent (`tell`, `broadcast`)
+  restent désactivées avec une ligne de log claire.
 
 ### 🧩 Appels natifs et pool d'objets
 
-`FindFunction(className, functionName)` balaie le pool d'objets vivant et compare par
-nom — c'est pourquoi les mises à jour qui **renomment** des UFunctions comptent plus
-que celles qui déplacent des offsets. Sur 1.0.1, `AActor::TeleportTo` a disparu du
+`FindFunction(className, functionName)` balaye le pool d'objets vivant et matche par
+nom — c'est pourquoi les mises à jour du jeu qui **renomment** des UFunctions comptent
+plus que celles qui déplacent des offsets. Sur 1.0.1, `AActor::TeleportTo` a disparu du
 pool ; le mod retombe sur `K2_TeleportTo` (le wrapper BlueprintCallable) avec l'offset
 de retour correspondant.
 
@@ -344,95 +357,86 @@ Quand le jeu patche, attendez-vous à un ou plusieurs de ces cas — par ordre d
 probabilité :
 
 1. **Globales déplacées** (GNames/GObjects/GWorld). Le scan de segments trouve les
-   nouvelles valeurs ; lancez le serveur une fois, lisez le log
-   (`GNames at … (segment scan)`) et mettez à jour `Offsets::G*` dans
-   `src/engine/dom_engine.h`. Les anciennes valeurs restent en commentaire.
-2. **Champs de structures déplacés** (offsets de membres de classes dans
-   `dom_engine.h`). Symptôme : valeurs plausibles mais fausses, ou champs vides dans
-   `/api/players`. Re-dumpez avec le SDK (RSDWSDK/Dumpspace) ou bissectez avec une
-   sonde en lecture seule sur `/proc/<pid>/mem`.
+   nouvelles valeurs ; lancez le serveur une fois, lisez le log (`GNames at … (segment
+   scan)`) et mettez à jour `Offsets::G*` dans `src/engine/dom_engine.h`. Les anciennes
+   valeurs sont conservées en commentaire.
+2. **Champs de struct déplacés** (offsets de membres de classes dans `dom_engine.h`).
+   Symptôme : valeurs plausibles mais fausses, ou champs vides dans `/api/players`.
+   Re-dumpez avec le SDK (RSDWSDK/Dumpspace) ou bissectez avec une sonde en lecture
+   seule `/proc/<pid>/mem`.
 3. **UFunctions renommées/supprimées** (ex. `TeleportTo` → `K2_TeleportTo`). Symptôme :
-   lignes `… not found` dans les logs + passage par un chemin de repli. Correctif :
-   résoudre le nouveau nom dans le pool.
-4. **Classes enregistrées tardivement** (game features). Symptôme : un lookup marche
-   sur certaines runs et pas d'autres. Correctif : résolution paresseuse à la première
-   utilisation, jamais une seule fois au boot.
-5. **Mise à niveau du moteur** (UE mineure/majeure). Tout peut bouger ; re-dumpez le SDK.
+   lignes `… not found` dans le log et un chemin de repli. Correctif : résolvez le
+   nouveau nom dans le pool.
+4. **Classes à enregistrement tardif** (game features). Symptôme : une résolution
+   fonctionne sur certains lancements et pas d'autres. Correctif : résolvez paresseusement
+   au premier usage, jamais une fois au boot.
+5. **Mise à niveau du moteur** (UE mineur/majeur). Tout peut bouger ; re-dumpez le SDK.
 
-La boucle la plus sûre : déployer → surveiller le log de démarrage (chaque étape de
-découverte est loggée) → vérifier `/api/health` + `/api/players` + un endpoint
-d'action → seulement ensuite faire confiance.
+La boucle la plus sûre : déployez → surveillez le log de démarrage (chaque étape de
+découverte est loggée) → vérifiez `/api/health` + `/api/players` + un endpoint d'action
+→ seulement ensuite, faites confiance.
 
-## 📣 Intégration Discord (DakkaBot — saveur dragonwilds)
+## 📣 Intégration Discord (plugin dkbot)
 
-En production, l'API est pilotée par la **saveur `dragonwilds` de DakkaBot** : un
-build autonome de [DakkaBot](https://github.com/ApachaiZ/DakkaBot) avec le module
-`dragonwilds` intégré — dépôt dédié
-[`ApachaiZ/DakkaBot-module-dragonwilds`](https://github.com/ApachaiZ/DakkaBot-module-dragonwilds),
-distribué sous forme du binaire `dkbot`.
+En production, l'API est pilotée par le **plugin `dkbot-dragonwilds`** exécuté dans le
+bot modulaire **[dkbot-base](https://github.com/ApachaiZ/dkbot-base)**. Installez le
+plugin et ses commandes Discord `/dw` apparaissent immédiatement — sans recompilation
+du cœur du bot.
 
-### Comment tout est branché
+### Comment c'est branché
 
 ```text
-Discord ──► dkbot (saveur dragonwilds) ──► API REST sur 127.0.0.1:8080 (Bearer token)
-                                              │
-                                              ▼ dans le processus (LD_PRELOAD)
-                                       librsdwapi.so à l'intérieur du serveur de jeu
+Discord ──► dkbot-base ──► plugin dkbot-dragonwilds (.so, ABI v1)
+                                │
+                                ▼ HTTP + Bearer token
+                          API REST sur 127.0.0.1:8080
+                                │
+                                ▼ dans le processus (LD_PRELOAD)
+                       librsdwapi.so dans le serveur de jeu
 ```
 
-1. **Même hôte** — le bot et le serveur dédié tournent sur la même machine
-   Linux : l'API écoute sur `127.0.0.1` et n'est jamais exposée à internet.
+1. **Même hôte** — le bot et le serveur dédié tournent sur la même machine Linux,
+   donc l'API se lie sur `127.0.0.1` et ne fait jamais face à internet.
 2. **Côté jeu** — l'unité systemd `dragonwilds` reçoit un drop-in avec
    `Environment=LD_PRELOAD=…/librsdwapi.so` et
-   `Environment=RSDWAPI_DIR=…/rsdwapi` ; le mod démarre ses listeners une fois
-   le moteur prêt et lit `settings.ini` (bind + `BearerToken`).
+   `Environment=RSDWAPI_DIR=…/rsdwapi` ; le mod démarre ses écouteurs une fois le
+   moteur prêt et lit `settings.ini` (bind + `BearerToken`).
 3. **Côté bot** — l'unité systemd `dakkabot` charge son `.env`
    (`EnvironmentFile=…/.config.d/.env`) :
-   `RSDW_API_BASE_URL=http://127.0.0.1:8080` et `RSDW_API_TOKEN=<la même valeur
-   que BearerToken dans settings.ini>`. Sans token concordant, chaque requête
+   `RSDW_API_BASE_URL=http://127.0.0.1:8080` et `RSDW_API_TOKEN=<même valeur
+   que BearerToken dans settings.ini>`. Sans token correspondant, chaque requête
    reçoit `401`.
-4. **Commandes** — le module `dragonwilds` mappe chaque commande `/dw` 1:1 sur
-   un endpoint : `status` → health + status, `players`/`player` → players,
-   `items` → items, `announce` → broadcast, `kick`, `ban`/`unban`/`bans`,
-   `give`, `tp`/`tpto` → teleport/tpto, `tell`, `heal`, `feed`, `hydrate`,
-   `godmode`.
-5. **Autocomplétion** — `/api/players` et `/api/items` alimentent les
-   suggestions (cache ~30 s côté client).
-6. **Sécurité** — les commandes sensibles sont contrôlées par des rôles
-   Discord et confirmées ; chaque action est auditée dans les logs du bot.
-7. **Casse des en-têtes** — reqwest/hyper envoient `authorization` en
-   minuscules ; le correctif case-insensitive de ce code est ce qui fait
-   fonctionner le token.
+4. **Commandes** — le manifeste riche du plugin devient de vraies slash commands
+   Discord au démarrage du bot : `/dw status`, `/dw players`, `/dw player`,
+   `/dw items`, `/dw bans`, `/dw top`, `/dw kick`, `/dw ban`, `/dw unban`,
+   `/dw announce`, `/dw tell`, et l'ensemble cheat commutable par le propriétaire
+   `/dw tp`, `/dw tpto`, `/dw give`, `/dw godmode`, `/dw heal`, `/dw feed`,
+   `/dw hydrate`. Le switch cheat lui-même vit dans `/dw-admin cheats`
+   (administrateurs uniquement).
+5. **Autocomplétion** — `/api/players` et `/api/items` alimentent les listes de
+   suggestions (pseudos de joueurs, noms d'objets) directement, sans cache.
+6. **Réponses** — chaque commande renvoie une carte Discord formatée
+   (icônes, champs), jamais un dump JSON brut.
+7. **Sécurité** — les commandes sensibles sont conditionnées aux rôles Discord
+   (modérateur / administrateur / propriétaire) et le propriétaire peut masquer tout
+   l'ensemble cheat d'un seul switch ; chaque action est auditée dans les logs du bot.
+8. **Casse des en-têtes** — reqwest/hyper envoient `authorization` en minuscules ; le
+   correctif d'en-têtes insensibles à la casse de ce code est ce qui fait marcher le
+   token tout court.
 
 ## 🔒 Sécurité
 
-- 🔐 Liez `127.0.0.1` et configurez un bearer token en production ; gardez
-  `IPWhitelist` pour les montages multi-hôtes. L'API est sinon sans authentification,
+- 🔐 Liez sur `127.0.0.1` et mettez un bearer token en production ; gardez
+  `IPWhitelist` pour les configurations multi-hôtes. L'API est sinon non authentifiée,
   par conception.
 - 📵 RCON reste désactivé sauf besoin ; son mot de passe est généré une fois.
-- 🚦 Les échecs de login RCON sont limités en débit et auto-bloqués par adresse.
+- 🚦 Les connexions RCON en échec sont limitées en débit et auto-bloquées par adresse.
 
 ## 🩺 Dépannage
 
 | Symptôme | Cause | Correctif |
 |---|---|---|
-| `/api/health` répond `engineReady:false` pour toujours | Le script lanceur (aussi injecté) a pris le port REST en premier | Corrigé : les listeners ne se lient que dans le processus où le moteur s'est initialisé ; mettez le mod à jour |
-| Les clients (reqwest/hyper, bots) reçoivent `401` avec le bon token ; `curl` marche | Les noms d'en-têtes arrivent en minuscules (`authorization`) ; lookup sensible à la casse | Corrigé : noms mis en minuscules au parse (RFC 9110) ; mettez le mod à jour |
-| `chat commands unavailable` / lookups ratés sur certaines runs | Les classes de game features s'enregistrent après le boot | Corrigé : re-résolution paresseuse à la première utilisation |
-| Le soin/téléport « réussit » mais le joueur ne voit rien | Les écritures mémoire directes contournent la réplication UE (pas de dirty mark) | Corrigé : fonctions natives sur le game thread (`IncreaseHealth`, `K2_TeleportTo`) |
-| Tout répond `503` | La découverte du moteur a échoué | Regardez le log de démarrage — une mise à jour a probablement déplacé les globales ; voir [🔧 Adapter](#-adapter-à-un-nouveau-build-du-jeu) |
-| RCON ne démarre pas | `Password` vide sous `[RCON]` | Mettez un mot de passe ; vide = RCON désactivé par conception |
-
-## 🤝 Contribuer
-
-PR bienvenues — en particulier les mises à jour d'offsets pour les nouveaux builds et
-les tests d'endpoints. Gardez la couche de découverte validée : chaque nouvelle lecture
-de champ doit passer par `Mem::Readable`/`Mem::Read`, et les appels natifs doivent être
-marshallés via `GameThread::RunSync`.
-
-En amont : [dkoz/RSDWServerAPI](https://github.com/dkoz/RSDWServerAPI) ·
-Source des offsets : RSDWSDK (`Dumpspace/OffsetsInfo.json`, `CppSDK`).
-
-## 📄 Licence
-
-[MIT](LICENSE) — © 2026 Kozejin et contributeurs.
+| `/api/health` répond `engineReady:false` pour toujours | Le wrapper du lanceur (aussi injecté) a pris le port REST en premier | Corrigé : les écouteurs ne se lient que dans le processus où le moteur s'est initialisé ; mettez à jour le mod |
+| Les clients (reqwest/hyper, bots) reçoivent `401` avec le bon token ; `curl` marche | Les noms d'en-tête arrivent en minuscules (`authorization`) ; recherche sensible à la casse | Corrigé : noms mis en minuscules au parse (RFC 9110) ; mettez à jour le mod |
+| `chat commands unavailable` / résolutions qui échouent sur certains lancements | Les classes de game features s'enregistrent après le boot | Corrigé : re-résolution paresseuse au premier usage |
+| Heal/téléportation « réussit » mais le joueur ne voit rien | Les écritures mémoire directes contournent la réplication UE (pas de dirty mark) | Corrigé : fonctions natives sur le thread de jeu (`IncreaseHealth`, `K2_TeleportTo`) |
