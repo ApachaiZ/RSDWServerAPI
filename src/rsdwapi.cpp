@@ -76,6 +76,21 @@ const char* kDeathLines[] = {
     "%s a été convoqué au grand banquet des ancêtres. En plat principal.",
 };
 
+// Construit un payload Discord (embed) pour un événement. Renvoie "" si la
+// cible d'événements n'est pas un webhook Discord (le JSON brut part alors).
+std::string EventDiscordPayload(const std::string& title, const std::string& body,
+                                int color) {
+    if (g_Config.events.url.find("discord.com/api/webhooks") == std::string::npos) {
+        return "";
+    }
+    std::string payload = "{\"username\":\"" + Json::Escape("Dragonwilds") +
+                          "\",\"allowed_mentions\":{\"parse\":[]},\"embeds\":[{"
+                          "\"title\":\"" + Json::Escape(title) +
+                          "\",\"description\":\"" + Json::Escape(body) +
+                          "\",\"color\":" + std::to_string(color) + "}]}";
+    return payload;
+}
+
 std::string ComicDeathLine(const std::string& name, const std::string& where) {
     static std::atomic<int> counter{0};
     int index = counter.fetch_add(1) % 42;
@@ -200,7 +215,9 @@ void InitThread() {
                         std::string payload = "{\"type\":\"chat\",\"player\":\"" +
                                               Json::Escape(sender) + "\",\"message\":\"" +
                                               Json::Escape(message.body) + "\"}";
-                        Discord::PostEvent(payload);
+                        Discord::PostEvent(
+                            payload,
+                            EventDiscordPayload("💬 " + sender, message.body, 0x5865F2));
                     }
                 });
             }
@@ -213,7 +230,7 @@ void InitThread() {
         DomBans::Load();
 
         std::map<std::string, bool> wasDead;
-        std::map<std::string, bool> wasPresent;
+        std::map<std::string, std::string> wasPresent;
         std::map<std::string, std::chrono::steady_clock::time_point> deathPosted;
         std::mutex deathMutex;
 
@@ -233,7 +250,9 @@ void InitThread() {
                 std::string payload = "{\"type\":\"death\",\"player\":\"" +
                                       Json::Escape(name) + "\",\"location\":\"" +
                                       Json::Escape(where) + "\"}";
-                Discord::PostEvent(payload);
+                std::string body = "**" + name + "** est mort" +
+                                   (where.empty() ? "" : " en `" + where + "`") + ".";
+                Discord::PostEvent(payload, EventDiscordPayload("☠️ Mort en jeu", body, 0xE74C3C));
             }
         };
 
@@ -271,10 +290,13 @@ void InitThread() {
             DomChat::Poll();
 
             std::map<std::string, bool> nowDead;
-            std::map<std::string, bool> nowPresent;
+            std::map<std::string, std::string> nowPresent;
             for (const DomEngine::PlayerInfo& player : DomEngine::g_Engine->GetAllPlayers()) {
                 if (player.uniqueNetId.empty()) continue;
-                nowPresent[player.uniqueNetId] = true;
+                std::string displayName =
+                    player.characterName.empty() ? player.name : player.characterName;
+                if (displayName.empty()) displayName = player.uniqueNetId;
+                nowPresent[player.uniqueNetId] = displayName;
                 if (!player.hasHealth) continue;
                 nowDead[player.uniqueNetId] = player.isDead;
 
@@ -290,20 +312,28 @@ void InitThread() {
             wasDead.swap(nowDead);
 
             if (g_Config.events.enabled) {
-                std::string lastLeft;
                 for (const auto& entry : wasPresent) {
                     const std::string& netId = entry.first;
-                    if (entry.second && nowPresent.find(netId) == nowPresent.end()) {
-                        lastLeft = netId;
-                        Discord::PostEvent("{\"type\":\"leave\",\"netId\":\"" +
-                                           Json::Escape(netId) + "\"}");
-                    }
-                    if (!entry.second && nowPresent.find(netId) != nowPresent.end()) {
-                        Discord::PostEvent("{\"type\":\"join\",\"netId\":\"" +
-                                           Json::Escape(netId) + "\"}");
+                    const std::string& name = entry.second;
+                    if (nowPresent.find(netId) == nowPresent.end()) {
+                        Discord::PostEvent(
+                            "{\"type\":\"leave\",\"netId\":\"" + Json::Escape(netId) +
+                                "\",\"player\":\"" + Json::Escape(name) + "\"}",
+                            EventDiscordPayload("👋 Départ", "**" + name + "** a quitté le serveur.",
+                                                0x95A5A6));
                     }
                 }
-                (void)lastLeft;
+                for (const auto& entry : nowPresent) {
+                    const std::string& netId = entry.first;
+                    const std::string& name = entry.second;
+                    if (wasPresent.find(netId) == wasPresent.end()) {
+                        Discord::PostEvent(
+                            "{\"type\":\"join\",\"netId\":\"" + Json::Escape(netId) +
+                                "\",\"player\":\"" + Json::Escape(name) + "\"}",
+                            EventDiscordPayload("✅ Arrivée", "**" + name + "** vient de rejoindre le serveur.",
+                                                0x2ECC71));
+                    }
+                }
             }
             wasPresent.swap(nowPresent);
         }

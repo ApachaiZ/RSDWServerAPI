@@ -62,6 +62,7 @@ void RunCurl(const std::string& command) {
 struct Item {
     std::string content;
     std::string gifPath;
+    std::string payload;  // JSON Discord complet pré-formaté (embeds) — prioritaire
 };
 
 struct Sender {
@@ -70,6 +71,7 @@ struct Sender {
     std::string name;
     std::string url;
     std::string username = "Dragonwilds";
+    bool discordMode = true;
     std::atomic<bool> enabled{false};
     std::atomic<bool> running{false};
     std::thread* worker = nullptr;
@@ -79,6 +81,23 @@ struct Sender {
     std::deque<Item> queue;
 
     void Send(const Item& item) {
+        // Cible non-Discord (webhook JSON générique) : contenu brut tel quel.
+        if (!discordMode) {
+            std::string command = "curl -s -o /dev/null -m 10 -X POST "
+                                  "-H 'Content-Type: application/json' -d " +
+                                  ShellQuote(item.content) + " '" + url + "'";
+            RunCurl(command);
+            return;
+        }
+
+        if (!item.payload.empty()) {
+            std::string command = "curl -s -o /dev/null -m 10 -X POST "
+                                  "-H 'Content-Type: application/json' -d " +
+                                  ShellQuote(item.payload) + " '" + url + "'";
+            RunCurl(command);
+            return;
+        }
+
         std::string payload = "{\"username\":\"" + Json::Escape(username) +
                               "\",\"content\":\"" + Json::Escape(item.content) +
                               "\",\"allowed_mentions\":{\"parse\":[]}}";
@@ -132,6 +151,7 @@ struct Sender {
         }
 
         url = webhookUrl;
+        discordMode = url.find("discord.com/api/webhooks") != std::string::npos;
         if (!webhookUsername.empty()) username = webhookUsername;
 
         enabled = true;
@@ -154,8 +174,9 @@ struct Sender {
         enabled = false;
     }
 
-    void Post(const std::string& line, const std::string& gifPath = "") {
-        if (!enabled || line.empty()) return;
+    void Post(const std::string& line, const std::string& gifPath = "",
+              const std::string& payload = "") {
+        if (!enabled || (line.empty() && payload.empty())) return;
         if (!gifPath.empty() && !PathIsSafe(gifPath)) {
             LogMessage("Discord: " + name + " GIF path rejected (unsafe characters)");
             return;
@@ -163,7 +184,7 @@ struct Sender {
 
         std::lock_guard<std::mutex> lock(mutex);
         if (queue.size() >= 200) queue.pop_front();
-        queue.push_back({line, gifPath});
+        queue.push_back({line, gifPath, payload});
         signal.notify_all();
     }
 };
@@ -202,8 +223,8 @@ void PostDeath(const std::string& line, const std::string& gifPath) {
     g_Deaths.Post(line, gifPath);
 }
 
-void PostEvent(const std::string& jsonLine) {
-    g_Events.Post(jsonLine);
+void PostEvent(const std::string& jsonLine, const std::string& discordPayload) {
+    g_Events.Post(jsonLine, "", discordPayload);
 }
 
 }

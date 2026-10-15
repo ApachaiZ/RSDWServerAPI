@@ -12,6 +12,6 @@ bool IsEnabled(Channel channel);
 
 void Post(Channel channel, const std::string& line);
 void PostDeath(const std::string& line, const std::string& gifPath);
-void PostEvent(const std::string& jsonLine);
+void PostEvent(const std::string& jsonLine, const std::string& discordPayload);
 
 }
