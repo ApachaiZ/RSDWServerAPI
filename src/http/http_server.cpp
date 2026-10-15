@@ -4,12 +4,23 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sstream>
 #include <sys/select.h>
 #include <sys/socket.h>
+
+namespace {
+
+int64_t NowSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+}
 #include <chrono>
 #include <thread>
 #include <unistd.h>
@@ -286,6 +297,26 @@ void HttpServer::HandleClient(int clientSocket) {
     setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
+    sockaddr_in peer = {};
+    socklen_t peerLen = sizeof(peer);
+    std::string peerIp;
+    if (getpeername(clientSocket, (sockaddr*)&peer, &peerLen) == 0) {
+        peerIp = Net::IpToString(peer.sin_addr.s_addr);
+    }
+
+    if (!peerIp.empty()) {
+        bool blocked = false;
+        if (!RateGate(peerIp, blocked)) {
+            HttpResponse resp(429);
+            resp.body = blocked
+                            ? R"({"error":"Rate limit: address blocked, try again later"})"
+                            : R"({"error":"Rate limit reached. This address may run less requests per minute."})";
+            SendResponse(clientSocket, resp);
+            close(clientSocket);
+            return;
+        }
+    }
+
     HttpRequest req;
     std::string error = ParseRequest(clientSocket, req);
     if (!error.empty()) {
@@ -311,6 +342,7 @@ void HttpServer::HandleClient(int clientSocket) {
             }
         }
         if (!authorized) {
+            if (!peerIp.empty()) RecordFailedAuth(peerIp);
             HttpResponse resp(401);
             resp.body = R"({"error":"Unauthorized: invalid or missing bearer token"})";
             SendResponse(clientSocket, resp);
@@ -351,6 +383,52 @@ void HttpServer::HandleClient(int clientSocket) {
 void HttpServer::Get(const std::string& path, RouteHandler handler) {
     std::lock_guard<std::mutex> lock(routesMutex);
     routes.push_back({"GET", path, handler});
+}
+
+bool HttpServer::RateGate(const std::string& ip, bool& outBlocked) {
+    outBlocked = false;
+    int perMinute = g_Config.rest.commandsPerMinute > 0 ? g_Config.rest.commandsPerMinute : 120;
+    int burst = g_Config.rest.commandBurst > 0 ? g_Config.rest.commandBurst : 30;
+    int64_t now = NowSeconds();
+
+    std::lock_guard<std::mutex> lock(rateMutex);
+    RateState& state = rateStates[ip];
+
+    if (state.blockedUntil > now) {
+        outBlocked = true;
+        return false;
+    }
+
+    if (now - state.windowStart >= 60) {
+        state.windowStart = now;
+        state.count = 0;
+    }
+    state.count++;
+
+    if (state.count > perMinute || state.count > burst) {
+        LogVerbose("HTTP: rate limited " + ip);
+        return false;
+    }
+    return true;
+}
+
+void HttpServer::RecordFailedAuth(const std::string& ip) {
+    int maxFailed = g_Config.rest.maxFailedAuth > 0 ? g_Config.rest.maxFailedAuth : 10;
+    int window = g_Config.rest.failWindowSeconds > 0 ? g_Config.rest.failWindowSeconds : 60;
+    int ban = g_Config.rest.banSeconds > 0 ? g_Config.rest.banSeconds : 300;
+    int64_t now = NowSeconds();
+
+    std::lock_guard<std::mutex> lock(rateMutex);
+    RateState& state = rateStates[ip];
+    if (now - state.failWindowStart >= window) {
+        state.failWindowStart = now;
+        state.failCount = 0;
+    }
+    state.failCount++;
+    if (state.failCount >= maxFailed) {
+        state.blockedUntil = now + ban;
+        LogMessage("HTTP: blocked " + ip + " for " + std::to_string(ban) + "s after repeated failed auth");
+    }
 }
 
 void HttpServer::Post(const std::string& path, RouteHandler handler) {

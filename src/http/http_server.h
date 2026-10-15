@@ -36,9 +36,20 @@ struct RouteEntry {
 
 class HttpServer {
 private:
+    struct RateState {
+        int64_t windowStart = 0;
+        int count = 0;
+        int burst = 0;
+        int failCount = 0;
+        int64_t failWindowStart = 0;
+        int64_t blockedUntil = 0;
+    };
+
     int listenSocket;
     std::vector<RouteEntry> routes;
     std::mutex routesMutex;
+    std::mutex rateMutex;
+    std::unordered_map<std::string, RateState> rateStates;
     bool running;
     int m_Port;
     std::string m_BindAddress;
@@ -50,6 +61,8 @@ private:
     void HandleClient(int clientSocket);
     std::string ParseRequest(int clientSocket, HttpRequest& req);
     void SendResponse(int clientSocket, const HttpResponse& resp);
+    bool RateGate(const std::string& ip, bool& outBlocked);
+    void RecordFailedAuth(const std::string& ip);
     void ParseQuery(const std::string& fullPath, std::string& path,
                     std::unordered_map<std::string, std::string>& query);
     std::string UrlDecode(const std::string& str);
