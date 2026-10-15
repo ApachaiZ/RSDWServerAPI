@@ -81,6 +81,128 @@ void RegisterPlayers(HttpServer& server) {
         return Ok("broadcast sent");
     });
 
+    server.Post("/api/tell", [](const HttpRequest& req) -> HttpResponse {
+        if (!EngineReady()) return EngineUnavailable();
+
+        std::string player, message;
+        if (!Json::GetString(req.body, "player", player) || player.empty() ||
+            !Json::GetString(req.body, "message", message) || message.empty()) {
+            return Error(400, "player and message required");
+        }
+        if (message.size() > 500) return Error(400, "message too long (500 max)");
+
+        DomEngine::PlayerInfo target;
+        std::string matchedBy, error;
+        if (!DomEngine::g_Engine->ResolvePlayerIdentifier(player, target, matchedBy, error)) {
+            return Error(500, error);
+        }
+        if (!DomChat::SendToPlayer(target, "[Discord] " + message)) {
+            return Error(500, "could not deliver private message");
+        }
+        return Ok("message sent to " + player);
+    });
+
+    server.Post("/api/heal", [](const HttpRequest& req) -> HttpResponse {
+        if (!EngineReady()) return EngineUnavailable();
+
+        std::string player;
+        if (!Json::GetString(req.body, "player", player) || player.empty()) {
+            return Error(400, "player required");
+        }
+
+        std::string error;
+        float amount = 0.0f;
+        if (Json::GetFloat(req.body, "amount", amount) && amount > 0.0f) {
+            // Partial heal: Health += amount, clamped to MaxHealth.
+            DomEngine::PlayerInfo info;
+            std::string matchedBy;
+            if (!DomEngine::g_Engine->ResolvePlayerIdentifier(player, info, matchedBy, error)) {
+                return Error(500, error);
+            }
+            if (!info.hasHealth) return Error(500, "health not readable for this player");
+            float target = info.health + amount;
+            if (info.maxHealth > 0.0f && target > info.maxHealth) target = info.maxHealth;
+            if (!DomEngine::g_Engine->SetAttribute(player, "Health", target, error)) {
+                return Error(500, error);
+            }
+        } else if (!DomEngine::g_Engine->HealPlayer(player, error)) {
+            return Error(500, error);
+        }
+        return Ok("healed " + player);
+    });
+
+    server.Post("/api/feed", [](const HttpRequest& req) -> HttpResponse {
+        if (!EngineReady()) return EngineUnavailable();
+        std::string player;
+        if (!Json::GetString(req.body, "player", player) || player.empty()) {
+            return Error(400, "player required");
+        }
+        std::string error;
+        if (!DomEngine::g_Engine->FeedPlayer(player, error)) return Error(500, error);
+        return Ok("fed " + player);
+    });
+
+    server.Post("/api/hydrate", [](const HttpRequest& req) -> HttpResponse {
+        if (!EngineReady()) return EngineUnavailable();
+        std::string player;
+        if (!Json::GetString(req.body, "player", player) || player.empty()) {
+            return Error(400, "player required");
+        }
+        std::string error;
+        if (!DomEngine::g_Engine->HydratePlayer(player, error)) return Error(500, error);
+        return Ok("hydrated " + player);
+    });
+
+    server.Post("/api/godmode", [](const HttpRequest& req) -> HttpResponse {
+        if (!EngineReady()) return EngineUnavailable();
+        std::string player;
+        if (!Json::GetString(req.body, "player", player) || player.empty()) {
+            return Error(400, "player required");
+        }
+        bool enabled = true;
+        Json::GetBool(req.body, "enabled", enabled);
+        std::string error;
+        if (!DomEngine::g_Engine->SetGodMode(player, enabled, error)) {
+            return Error(500, error);
+        }
+        return Ok(std::string(enabled ? "god mode ON for " : "god mode OFF for ") + player);
+    });
+
+    server.Post("/api/teleport", [](const HttpRequest& req) -> HttpResponse {
+        if (!EngineReady()) return EngineUnavailable();
+
+        std::string from, to;
+        if (!Json::GetString(req.body, "from", from) || from.empty() ||
+            !Json::GetString(req.body, "to", to) || to.empty()) {
+            return Error(400, "from and to required (playerId, name, characterName, netId or characterGuid)");
+        }
+
+        std::string error;
+        if (!DomEngine::g_Engine->TeleportPlayer(from, to, error)) {
+            return Error(500, error);
+        }
+        return Ok("teleported " + from + " to " + to);
+    });
+
+    server.Post("/api/tpto", [](const HttpRequest& req) -> HttpResponse {
+        if (!EngineReady()) return EngineUnavailable();
+
+        std::string player, xRaw, yRaw, zRaw;
+        if (!Json::GetString(req.body, "player", player) || player.empty() ||
+            !Json::GetNumber(req.body, "x", xRaw) ||
+            !Json::GetNumber(req.body, "y", yRaw) ||
+            !Json::GetNumber(req.body, "z", zRaw)) {
+            return Error(400, "player, x, y and z required (doubles)");
+        }
+
+        std::string error;
+        if (!DomEngine::g_Engine->TeleportToCoords(player, std::stod(xRaw),
+                                                   std::stod(yRaw), std::stod(zRaw), error)) {
+            return Error(500, error);
+        }
+        return Ok("teleported " + player);
+    });
+
     server.Post("/api/give", [](const HttpRequest& req) -> HttpResponse {
         if (!EngineReady()) return EngineUnavailable();
 

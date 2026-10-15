@@ -24,8 +24,12 @@ namespace DomEngine {
 namespace Offsets {
 
 // Image offsets - Source: RSDWSDK/Dumpspace/OffsetsInfo.json
-constexpr uintptr_t GObjects = 0x0DC2E4D0;
-constexpr uintptr_t GNames   = 0x0DB72FB8;
+// Build 247725 (2026-10-11): GNames 0x0DB7EFF8, GObjects 0x0DC3A510.
+// Build 1.0.1 (CL 248854, 2026-10-14), verified live on the production
+// server via the mod's segment scan (base 0x200000):
+// GNames 0xDDDAFF8, GObjects 0xDE96510.
+constexpr uintptr_t GObjects = 0x0DC96510;
+constexpr uintptr_t GNames   = 0x0DBDAFF8;
 constexpr uintptr_t GWorld   = 0x0DD525F8;
 
 // TUObjectArray / FUObjectItem - Source: RSDWSDK/CppSDK/SDK/Basic.hpp
@@ -125,6 +129,7 @@ constexpr uintptr_t Character_Mesh              = 0x340;
 constexpr uintptr_t Character_CharacterMovement = 0x348;
 
 // Source: RSDWSDK/CppSDK/Assertions.inl. Locations and rotations are doubles:
+// Source : RSDWSDK/CppSDK/Assertions.inl. Positions et rotations sont des doubles.
 constexpr uintptr_t SceneComp_RelativeLocation = 0x148;
 constexpr uintptr_t SceneComp_RelativeRotation = 0x160;
 constexpr uintptr_t MovementComp_Velocity      = 0xD8;
@@ -251,6 +256,16 @@ struct DiscoveryInfo {
     int32_t objectCount = 0;
 };
 
+// Player components resolved by ownership (the SDK offset can move
+// between builds; the Outer scan is the recovery path).
+struct PawnComponents {
+    uintptr_t sustenance = 0;
+    uintptr_t hydration = 0;
+    uintptr_t health = 0;
+    uintptr_t attributes = 0;
+    uintptr_t skill = 0;
+};
+
 class Engine {
 private:
     uintptr_t moduleBase = 0;
@@ -301,13 +316,32 @@ private:
     void ReadAttributeArrays(uintptr_t attributesComponent, uintptr_t attributesOffset,
                              uintptr_t valuesOffset, bool shared,
                              std::vector<AttributeInfo>& out) const;
-    void ReadHealthAndAttributes(PlayerInfo& info) const;
-    void ReadSkills(PlayerInfo& info) const;
+    void ReadHealthAndAttributes(PlayerInfo& info, const PawnComponents&) const;
+    void ReadSkills(PlayerInfo& info, const PawnComponents&) const;
 
 public:
 
     bool KickPlayer(const std::string& identifier, const std::string& reason,
                     std::string& outError) const;
+    bool TeleportToCoords(const std::string& identifier, double x, double y,
+                          double z, std::string& outError) const;
+    bool TeleportPlayer(const std::string& from, const std::string& to,
+                        std::string& outError) const;
+
+    // Player identifier resolution (playerId, netId, characterGuid,
+    // characterName, name) — shared by teleport and routes.
+    bool ResolvePlayerIdentifier(const std::string& identifier, PlayerInfo& out,
+                                 std::string& matchedBy, std::string& outError) const;
+    bool SetAttribute(const std::string& identifier,
+                      const std::string& attributeName, float value,
+                      std::string& outError) const;
+    bool HealPlayer(const std::string& identifier, std::string& outError) const;
+    bool SetGodMode(const std::string& identifier, bool enabled,
+                    std::string& outError) const;
+    bool SetVital(const std::string& identifier, const char* componentName,
+                  float value, std::string& outError) const;
+    bool FeedPlayer(const std::string& identifier, std::string& outError) const;
+    bool HydratePlayer(const std::string& identifier, std::string& outError) const;
     uintptr_t FindFunction(const char* className, const char* functionName) const;
 
     void RememberKick(const std::string& netId, const std::string& name,

@@ -161,12 +161,40 @@ void HookedChatProcessEvent(void* self, void* function, void* params) {
     if (previous) previous(self, function, params);
 }
 
-bool SendToPlayer(const PlayerInfo& player, const std::string& body) {
+bool IsPlayersChatComponent(Engine& engine, uintptr_t component, uintptr_t controller) {
+    return component && engine.IsA(component, "PlayerChatComponent") &&
+           Mem::ReadPtr(component + Offsets::UObject_Outer) == controller;
+}
+
+uintptr_t FindPlayersChatComponent(Engine& engine, uintptr_t controller) {
+    if (!controller) return 0;
+    uintptr_t component = Mem::ReadPtr(controller + kControllerChatComponent);
+    if (IsPlayersChatComponent(engine, component, controller)) return component;
+
+    // Controller members can move between builds: only use a chat
+    // component OWNED by this controller, never an arbitrary readable one.
+    uintptr_t match = 0;
+    for (int32_t i = 0, count = engine.GetObjectCount(); i < count; ++i) {
+        uintptr_t candidate = engine.GetObjectByIndex(i);
+        if (!IsPlayersChatComponent(engine, candidate, controller)) continue;
+        if (match && match != candidate) {
+            LogMessage("Chat: multiple chat components belong to controller; refusing ambiguous recipient — plusieurs composants de chat pour ce contrôleur, destinataire ambigu refusé");
+            return 0;
+        }
+        match = candidate;
+    }
+    if (match) LogMessage("Chat: resolved recipient component by controller ownership (SDK offset did not validate) — composant du destinataire résolu par appartenance au contrôleur (offset SDK invalide)");
+    else LogMessage("Chat: no PlayerChatComponent found for recipient controller — aucun composant de chat trouvé pour le contrôleur du destinataire");
+    return match;
+}
+
+bool SendToPlayerInternal(const PlayerInfo& player, const std::string& body) {
     if (!g_ReceiveFunction || !GameThread::HasProcessEvent()) return false;
     if (!player.controllerPtr || !player.playerStatePtr) return false;
 
-    uintptr_t component = Mem::ReadPtr(player.controllerPtr + kControllerChatComponent);
-    if (!component || !Mem::Readable((void*)component, 0x150)) return false;
+    if (!g_Engine) return false;
+    uintptr_t component = FindPlayersChatComponent(*g_Engine, player.controllerPtr);
+    if (!component) return false;
 
     uint8_t params[kMessageSize + 16];
     memset(params, 0, sizeof(params));
@@ -192,7 +220,21 @@ bool SendToPlayer(const PlayerInfo& player, const std::string& body) {
 }
 
 bool IsAdmin(uintptr_t controller) {
-    if (!controller || !g_AdminFunction || !g_AdminLibrary) return false;
+    if (!controller) return false;
+
+    Engine* engine = g_Engine;
+    if (!engine || !engine->IsInitialized()) return false;
+
+    // Late-registered game feature: the one-shot Initialize() lookup can
+    // miss it at boot. Resolve lazily on first use, like items.cpp.
+    if (!g_AdminFunction) {
+        g_AdminFunction =
+            engine->FindFunction("PrivilegeFunctionLibrary", "ControllerIsOwnerOrAdmin");
+    }
+    if (!g_AdminLibrary) {
+        g_AdminLibrary = engine->FindObject("PrivilegeFunctionLibrary", true);
+    }
+    if (!g_AdminFunction || !g_AdminLibrary) return false;
     if (!NativeCall::IsNative(g_AdminFunction)) return false;
 
     struct Params {
@@ -343,6 +385,13 @@ void SendThunk(void* context, void* frame, void* result) {
 
 }
 
+// Defined here (not in the anonymous namespace) because chat.h declares
+// it with external linkage — an internal definition would break at link
+// time with a symbol lookup error (crashing the game process).
+bool SendToPlayer(const DomEngine::PlayerInfo& player, const std::string& body) {
+    return SendToPlayerInternal(player, body);
+}
+
 bool IsHooked() { return g_Hooked; }
 const std::string& Status() { return g_Status; }
 
@@ -382,7 +431,7 @@ void Poll() {
             std::lock_guard<std::mutex> lock(g_VTableMutex);
             g_HookedVTables[vtable] = previous;
         }
-        LogMessage("Chat: watching player events on " + engine->GetObjectClassName(component));
+        LogMessage("Chat: watching player events (surveille les événements joueurs) on " + engine->GetObjectClassName(component));
     }
 }
 
@@ -421,9 +470,9 @@ bool Initialize() {
 
     g_Hooked = true;
     g_Status = "hooked";
-    LogMessage("Chat: reading messages from PlayerChatComponent.Server_SendChatMessage");
-    if (!g_ReceiveFunction) LogMessage("Chat: Client_ReceiveChatMessage not found, broadcast unavailable");
-    if (!g_AdminFunction || !g_AdminLibrary) LogMessage("Chat: ControllerIsOwnerOrAdmin not found, chat commands unavailable");
+    LogMessage("Chat: reading messages (lecture des messages) from PlayerChatComponent.Server_SendChatMessage");
+    if (!g_ReceiveFunction) LogMessage("Chat: Client_ReceiveChatMessage not found, broadcast unavailable — introuvable, diffusion indisponible");
+    if (!g_AdminFunction || !g_AdminLibrary) LogMessage("Chat: ControllerIsOwnerOrAdmin not found, chat commands unavailable — introuvable, commandes chat indisponibles");
     return true;
 }
 
@@ -459,7 +508,7 @@ bool Broadcast(const std::string& body, std::string& outError) {
     int delivered = 0;
     bool ran = GameThread::RunSync([&]() {
         for (const PlayerInfo& player : players) {
-            if (SendToPlayer(player, body)) delivered++;
+            if (SendToPlayerInternal(player, body)) delivered++;
         }
     }, 10000);
 
@@ -472,7 +521,64 @@ bool Broadcast(const std::string& body, std::string& outError) {
         return false;
     }
 
-    LogMessage("Chat: broadcast to " + std::to_string(delivered) + " player(s): " + body);
+    LogMessage("Chat: broadcast (diffusion) to " + std::to_string(delivered) + " player(s): " + body);
+    return true;
+}
+
+
+bool Tell(const std::string& identifier, const std::string& body,
+          std::string& outError) {
+    Engine* engine = g_Engine;
+    if (!engine || !engine->IsInitialized()) {
+        outError = "engine not initialised";
+        return false;
+    }
+    if (!GameThread::IsReady() || !GameThread::HasProcessEvent()) {
+        outError = "chat unavailable: " + GameThread::Status();
+        return false;
+    }
+    if (body.empty()) {
+        outError = "message is empty";
+        return false;
+    }
+
+    std::vector<PlayerInfo> players = engine->GetAllPlayers();
+    PlayerInfo target;
+    int hits = 0;
+    for (const PlayerInfo& player : players) {
+        bool match = std::to_string(player.playerId) == identifier ||
+                     player.uniqueNetId == identifier ||
+                     player.characterGuid == identifier ||
+                     player.characterName == identifier ||
+                     player.name == identifier;
+        if (match) {
+            hits++;
+            target = player;
+        }
+    }
+    if (hits == 0) {
+        outError = "player not found: " + identifier;
+        return false;
+    }
+    if (hits > 1) {
+        outError = "ambiguous identifier \"" + identifier + "\"";
+        return false;
+    }
+
+    bool delivered = false;
+    std::string innerError;
+    bool ran = GameThread::RunSync([&]() {
+        delivered = SendToPlayerInternal(target, body);
+        if (!delivered) innerError = "send failed";
+    });
+    if (!ran) {
+        outError = "game thread busy: " + GameThread::Status();
+        return false;
+    }
+    if (!delivered) {
+        outError = innerError.empty() ? "message not delivered" : innerError;
+        return false;
+    }
     return true;
 }
 

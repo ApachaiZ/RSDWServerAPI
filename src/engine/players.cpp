@@ -11,11 +11,6 @@ namespace DomEngine {
 
 namespace {
 
-struct PawnComponents {
-    uintptr_t sustenance = 0;
-    uintptr_t hydration = 0;
-};
-
 void ReadDoubleTriple(uintptr_t address, double& a, double& b, double& c) {
     if (!Mem::Readable((void*)address, sizeof(double) * 3)) return;
     double values[3] = {};
@@ -32,6 +27,49 @@ bool ReadArray(uintptr_t address, FUEArray& out, int32_t maxCount) {
 }
 
 }
+
+bool Engine::ResolvePlayerIdentifier(const std::string& identifier, PlayerInfo& out,
+                                       std::string& matchedBy,
+                                       std::string& outError) const {
+    std::string PlayerInfo::* const fields[] = {
+        &PlayerInfo::uniqueNetId,
+        &PlayerInfo::characterGuid,
+        &PlayerInfo::characterName,
+        &PlayerInfo::name,
+    };
+
+    std::vector<PlayerInfo> players = GetAllPlayers();
+
+    for (const PlayerInfo& player : players) {
+        if (std::to_string(player.playerId) == identifier) {
+            out = player;
+            matchedBy = "playerId";
+            return true;
+        }
+    }
+    for (size_t f = 0; f < sizeof(fields) / sizeof(fields[0]); f++) {
+        int hits = 0;
+        PlayerInfo match;
+        for (const PlayerInfo& player : players) {
+            if ((player.*fields[f]).empty()) continue;
+            if (player.*fields[f] != identifier) continue;
+            hits++;
+            match = player;
+        }
+        if (hits == 1) {
+            out = match;
+            matchedBy = "field";
+            return true;
+        }
+        if (hits > 1) {
+            outError = "ambiguous identifier \"" + identifier + "\"";
+            return false;
+        }
+    }
+    outError = "player not found: " + identifier;
+    return false;
+}
+
 
 void Engine::ReadAttributeArrays(uintptr_t attributesComponent, uintptr_t attributesOffset,
                                  uintptr_t valuesOffset, bool shared,
@@ -63,16 +101,26 @@ void Engine::ReadAttributeArrays(uintptr_t attributesComponent, uintptr_t attrib
     }
 }
 
-void Engine::ReadHealthAndAttributes(PlayerInfo& info) const {
+void Engine::ReadHealthAndAttributes(PlayerInfo& info,
+                                      const PawnComponents& slots) const {
     if (!IsA(info.pawnPtr, "DominionPlayerCharacter")) return;
 
     uintptr_t health = Mem::ReadPtr(info.pawnPtr + Offsets::DomPlayerChar_HealthComponent);
+    if ((!health || !IsA(health, "PlayerHealthComponent")) && slots.health) {
+        LogMessage("Players: HealthComponent SDK offset did not validate — using owned component scan");
+        health = slots.health;
+    }
     if (!health || !Mem::Readable((void*)health, 0x1B8)) return;
 
     info.canDie = Mem::ReadU8(health + Offsets::Health_bCanDie) != 0;
 
     uintptr_t attributesComponent =
         Mem::ReadPtr(info.pawnPtr + Offsets::DomPlayerChar_AttributesComponent);
+    if ((!attributesComponent || !IsA(attributesComponent, "DominionAttributesComponent")) &&
+        slots.attributes) {
+        LogMessage("Players: AttributesComponent SDK offset did not validate — using owned component scan");
+        attributesComponent = slots.attributes;
+    }
     if (!attributesComponent || !Mem::Readable((void*)attributesComponent, 0x1B8)) return;
 
     ReadAttributeArrays(attributesComponent, Offsets::Attributes_FloatAttributes,
@@ -92,11 +140,15 @@ void Engine::ReadHealthAndAttributes(PlayerInfo& info) const {
     info.isDead = info.hasHealth && info.health <= 0.0f;
 }
 
-void Engine::ReadSkills(PlayerInfo& info) const {
+void Engine::ReadSkills(PlayerInfo& info, const PawnComponents& slots) const {
     if (!info.controllerPtr) return;
     if (!IsA(info.controllerPtr, "DominionPlayerControllerBase")) return;
 
     uintptr_t skills = Mem::ReadPtr(info.controllerPtr + Offsets::DomPlayerController_SkillComponent);
+    if ((!skills || !IsA(skills, "SkillComponent")) && slots.skill) {
+        LogMessage("Players: SkillComponent SDK offset did not validate — using owned component scan");
+        skills = slots.skill;
+    }
     if (!skills || !Mem::Readable((void*)skills, 0x210)) return;
 
     FUEArray list = {};
@@ -252,18 +304,46 @@ std::vector<PlayerInfo> Engine::GetAllPlayers() const {
             slots.sustenance = object;
         } else if (!slots.hydration && IsA(object, "HydrationComponent")) {
             slots.hydration = object;
+        } else if (!slots.health && IsA(object, "PlayerHealthComponent")) {
+            slots.health = object;
+        } else if (!slots.attributes && IsA(object, "DominionAttributesComponent")) {
+            slots.attributes = object;
+        }
+    }
+
+    // Skills live on the CONTROLLER-owned component, not the pawn.
+    std::unordered_set<uintptr_t> controllerSet;
+    for (const PlayerInfo& info : players) {
+        if (info.controllerPtr) controllerSet.insert(info.controllerPtr);
+    }
+    std::unordered_map<uintptr_t, uintptr_t> skillByController;
+    if (!controllerSet.empty()) {
+        for (int32_t i = 0; i < objectCount; i++) {
+            uintptr_t object = GetObjectByIndex(i);
+            if (!object) continue;
+            uintptr_t outer = Mem::ReadPtr(object + Offsets::UObject_Outer);
+            if (!outer || controllerSet.find(outer) == controllerSet.end()) continue;
+            if (!IsA(object, "SkillComponent")) continue;
+            skillByController[outer] = object;
+        }
+    }
+    for (PlayerInfo& info : players) {
+        if (!info.controllerPtr) continue;
+        auto it = skillByController.find(info.controllerPtr);
+        if (it != skillByController.end()) {
+            auto pit = byPawn.find(info.pawnPtr);
+            if (pit != byPawn.end()) pit->second.skill = it->second;
         }
     }
 
     for (PlayerInfo& info : players) {
         if (!info.pawnPtr) continue;
 
-        ReadHealthAndAttributes(info);
-        ReadSkills(info);
-
         auto it = byPawn.find(info.pawnPtr);
+        PawnComponents slots = (it != byPawn.end()) ? it->second : PawnComponents{};
+        ReadHealthAndAttributes(info, slots);
+        ReadSkills(info, slots);
         if (it == byPawn.end()) continue;
-        const PawnComponents& slots = it->second;
 
         if (slots.sustenance && Mem::Readable((void*)slots.sustenance, 0x140)) {
             info.hasSustenance = true;

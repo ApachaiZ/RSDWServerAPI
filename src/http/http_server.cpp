@@ -72,7 +72,7 @@ bool HttpServer::Start(int port, const std::string& bindAddress) {
     running = true;
     listenerThread = new std::thread(&HttpServer::ListenerLoop, this);
 
-    LogMessage("HTTP: Server started on " + bindAddress + ":" + std::to_string(m_Port));
+    LogMessage("HTTP: Server started (démarré) on " + bindAddress + ":" + std::to_string(m_Port));
     return true;
 }
 
@@ -97,7 +97,7 @@ void HttpServer::Stop() {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    LogMessage("HTTP: Server stopped");
+    LogMessage("HTTP: Server stopped (arrêté)");
 }
 
 void HttpServer::ListenerLoop() {
@@ -166,6 +166,11 @@ std::string HttpServer::ParseRequest(int clientSocket, HttpRequest& req) {
         std::string key = headerLine.substr(0, colon);
         std::string val = headerLine.substr(colon + 1);
         while (!val.empty() && val[0] == ' ') val.erase(0, 1);
+        // Header names are case-insensitive (RFC 9110). Store them
+        // lowercase so lookups work with clients that send
+        // "authorization" (reqwest/hyper and friends).
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
         req.headers[key] = val;
     }
 
@@ -295,7 +300,7 @@ void HttpServer::HandleClient(int clientSocket) {
     }
 
     if (!g_Config.rest.bearerToken.empty()) {
-        auto authIt = req.headers.find("Authorization");
+        auto authIt = req.headers.find("authorization");
         bool authorized = false;
         if (authIt != req.headers.end()) {
             const std::string& authHeader = authIt->second;
