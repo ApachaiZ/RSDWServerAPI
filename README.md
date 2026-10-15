@@ -1,20 +1,36 @@
 # 🐉 RSDWServerAPI
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)[![Version](https://img.shields.io/badge/version-0.1.6-blue.svg)](#-compatibility)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](#-compatibility)
 [![Game](https://img.shields.io/badge/game-RuneScape%3A%20Dragonwilds%201.0.1-orange.svg)](#-compatibility)
 [![Engine](https://img.shields.io/badge/engine-UE%205.6.1-purple.svg)](#-compatibility)
 
-A server management API for **RuneScape: Dragonwilds** dedicated servers on Linux.
+## 🧭 About
 
-It injects a REST API, a Source RCON listener, an in-game admin command set and an
-optional Discord relay into a running server — so you can see who is connected, read
-their live stats, teleport them, heal them, kick or ban them remotely: from a panel,
-a script, a Discord bot, or anything else that speaks HTTP.
+**RSDWServerAPI** turns a stock **RuneScape: Dragonwilds** dedicated Linux
+server into a remotely manageable one. It injects a full control plane into
+the running game process:
 
-> 🇫🇷 [Version française](README.fr.md)
+- 🌐 a **REST API** (live player stats, teleports, heal, give, kick, bans…),
+- 💬 a **Source RCON** listener for tools and panels,
+- 🎮 **in-game admin commands** (`/kick`, `/ban`, `/give`…) for owners/admins,
+- 📣 an optional **Discord relay** (chat + comic death announcements).
+
+It drives the whole administration loop — from a panel, a script, a Discord
+bot (the companion [`dkbot-dragonwilds`](https://github.com/ApachaiZ/dkbot-dragonwilds)
+plugin), or anything that speaks HTTP.
+
+> ⭐ **This is a fork** of the original project by **dkoz** —
+> **[dkoz/RSDWServerAPI](https://github.com/dkoz/RSDWServerAPI)** — without
+> whom none of this would exist.
 >
-> 💡 Maintained fork: production-hardened fixes, build 1.0.1 offsets, and extra
-> admin features (teleport, tell, heal, feed, hydrate, god mode).
+> 🙏 **Huge thanks to the original developer** for the solid foundation, the
+> clean architecture (validated discovery, native-call marshalling) and the
+> MIT licence that lets this fork build on it. The fork adds
+> production-hardening fixes, 1.0.1 build offsets, and extra admin features
+> (teleport, tell, heal, feed, hydrate, god mode). Upstream contributions
+> remain welcome there.
+>
+> 🌐 Languages: 🇫🇷 [Version française](README.fr.md) · 🇩🇪 [Deutsche Version](README.de.md) · 🇪🇸 [Versión española](README.es.md)
 
 ## 🚀 TL;DR — 5-minute setup
 
@@ -117,7 +133,7 @@ LD_PRELOAD=./librsdwapi.so ./RSDragonwilds/Binaries/Linux/RSDragonwildsServer-Li
 
 The drop-in below is what runs in production: `LD_PRELOAD` is applied service-wide
 (the launcher script *and* the game binary get injected — harmless, see
-[🏗️ How it works](#-how-it-works)), and the data directory is pinned with
+[🏗️ How it works](#️-how-it-works)), and the data directory is pinned with
 `RSDWAPI_DIR`:
 
 ```ini
@@ -342,21 +358,23 @@ When the game patches, expect one or more of these — in order of likelihood:
 The safest loop: deploy → watch the startup log (every discovery step is logged) →
 spot-check `/api/health` + `/api/players` + one action endpoint → only then trust it.
 
-## 📣 Discord integration (DakkaBot — dragonwilds flavor)
+## 📣 Discord integration (dkbot plugin)
 
-In production the API is driven by the **`dragonwilds` flavor of DakkaBot**: a
-self-contained build of [DakkaBot](https://github.com/ApachaiZ/DakkaBot) with the
-`dragonwilds` module integrated — its own dedicated repo,
-[`ApachaiZ/DakkaBot-module-dragonwilds`](https://github.com/ApachaiZ/DakkaBot-module-dragonwilds),
-shipped as the `dkbot` binary.
+In production the API is driven by the **`dkbot-dragonwilds` plugin** running
+inside the modular **[dkbot-base](https://github.com/ApachaiZ/dkbot-base)** bot.
+Install the plugin and its `/dw` Discord commands appear immediately — no
+recompilation of the bot core.
 
 ### How it is wired
 
 ```text
-Discord ──► dkbot (dragonwilds flavor) ──► REST API on 127.0.0.1:8080 (Bearer token)
-                                              │
-                                              ▼ in-process (LD_PRELOAD)
-                                       librsdwapi.so inside the game server
+Discord ──► dkbot-base ──► dkbot-dragonwilds plugin (.so, ABI v1)
+                                │
+                                ▼ HTTP + Bearer token
+                          REST API on 127.0.0.1:8080
+                                │
+                                ▼ in-process (LD_PRELOAD)
+                       librsdwapi.so inside the game server
 ```
 
 1. **Same host** — the bot and the dedicated server run on the same Linux
@@ -370,16 +388,21 @@ Discord ──► dkbot (dragonwilds flavor) ──► REST API on 127.0.0.1:808
    `RSDW_API_BASE_URL=http://127.0.0.1:8080` and `RSDW_API_TOKEN=<same value
    as BearerToken in settings.ini>`. Without a matching token every request
    gets `401`.
-4. **Commands** — the `dragonwilds` module maps each `/dw` command 1:1 to an
-   endpoint: `status` → health + status, `players`/`player` → players,
-   `items` → items, `announce` → broadcast, `kick`, `ban`/`unban`/`bans`,
-   `give`, `tp`/`tpto` → teleport/tpto, `tell`, `heal`, `feed`, `hydrate`,
-   `godmode`.
+4. **Commands** — the plugin's rich manifest becomes real Discord slash
+   commands at bot startup: `/dw status`, `/dw players`, `/dw player`,
+   `/dw items`, `/dw bans`, `/dw top`, `/dw kick`, `/dw ban`, `/dw unban`,
+   `/dw announce`, `/dw tell`, and the owner-switchable cheat set `/dw tp`,
+   `/dw tpto`, `/dw give`, `/dw godmode`, `/dw heal`, `/dw feed`,
+   `/dw hydrate`. The cheat switch itself lives in `/dw-admin cheats`
+   (administrators only).
 5. **Autocompletion** — `/api/players` and `/api/items` feed the suggestion
-   lists (cached ~30 s client-side).
-6. **Safety** — sensitive commands are gated by Discord roles and confirmed;
-   every action is audited in the bot's logs.
-7. **Header case** — reqwest/hyper send `authorization` in lowercase; the
+   lists (player nicknames, item names) directly, no cache.
+6. **Responses** — every command returns a formatted Discord embed card
+   (icons, fields), never a raw JSON dump.
+7. **Safety** — sensitive commands are gated by Discord roles (moderator /
+   administrator / owner) and the owner can hide the whole cheat set with
+   one switch; every action is audited in the bot's logs.
+8. **Header case** — reqwest/hyper send `authorization` in lowercase; the
    case-insensitive header fix in this codebase is what makes the token work
    at all.
 
