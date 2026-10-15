@@ -39,6 +39,11 @@ struct RestConfig {
     std::string bindAddress = "0.0.0.0";
     std::string bearerToken;
     std::string ipWhitelist;
+    int commandsPerMinute = 120;
+    int commandBurst = 30;
+    int maxFailedAuth = 10;
+    int failWindowSeconds = 60;
+    int banSeconds = 300;
 };
 
 struct RconConfig {
@@ -60,6 +65,17 @@ struct DiscordConfig {
     std::string webhookUrl;
     std::string deathWebhookUrl;
     std::string username = "Dragonwilds";
+    std::string deathGifPath;
+    int deathLines = 42;
+};
+
+struct EventsConfig {
+    bool enabled = false;
+    std::string url;
+    bool includeJoin = true;
+    bool includeLeave = true;
+    bool includeChat = false;
+    bool includeDeath = true;
 };
 
 struct APIConfig {
@@ -68,6 +84,7 @@ struct APIConfig {
     RestConfig rest;
     RconConfig rcon;
     DiscordConfig discord;
+    EventsConfig events;
 
     bool Load(const std::string& configPath) {
         std::ifstream file(configPath);
@@ -128,7 +145,15 @@ struct APIConfig {
         file << "# an empty value is kept as written, not regenerated on the next start.\n";
         file << "BearerToken=" << rest.bearerToken << "\n";
         file << "# Comma separated addresses and CIDR blocks. Empty allows everyone.\n";
-        file << "IPWhitelist=" << rest.ipWhitelist << "\n\n";
+        file << "IPWhitelist=" << rest.ipWhitelist << "\n";
+        file << "# Sustained request rate per client address, and the burst it may spend at once.\n";
+        file << "CommandsPerMinute=" << rest.commandsPerMinute << "\n";
+        file << "CommandBurst=" << rest.commandBurst << "\n";
+        file << "# Failed authentications allowed inside FailWindowSeconds before the address\n";
+        file << "# is refused for BanSeconds.\n";
+        file << "MaxFailedAuth=" << rest.maxFailedAuth << "\n";
+        file << "FailWindowSeconds=" << rest.failWindowSeconds << "\n";
+        file << "BanSeconds=" << rest.banSeconds << "\n\n";
 
         file << "[RCON]\n";
         file << "# Source RCON, off by default. Set to true to enable it; the password\n";
@@ -157,6 +182,19 @@ struct APIConfig {
         file << "WebhookUrl=" << discord.webhookUrl << "\n";
         file << "DeathWebhookUrl=" << discord.deathWebhookUrl << "\n";
         file << "Username=" << discord.username << "\n";
+        file << "# Deaths are announced with a random comic line and this GIF (Discord\n";
+        file << "# multipart upload). Empty = text only.\n";
+        file << "DeathGifPath=" << discord.deathGifPath << "\n\n";
+
+        file << "[Events]\n";
+        file << "# Pushes game events (join/leave/chat/death) as JSON to an HTTP endpoint.\n";
+        file << "# Off by default. http:// allowed for local tools (https:// for the rest).\n";
+        file << "Enabled=" << Bool(events.enabled) << "\n";
+        file << "Url=" << events.url << "\n";
+        file << "IncludeJoin=" << Bool(events.includeJoin) << "\n";
+        file << "IncludeLeave=" << Bool(events.includeLeave) << "\n";
+        file << "IncludeChat=" << Bool(events.includeChat) << "\n";
+        file << "IncludeDeath=" << Bool(events.includeDeath) << "\n";
     }
 
     static std::string GenerateSecureToken(size_t bytes) {
@@ -197,6 +235,11 @@ private:
             else if (key == "BindAddress") rest.bindAddress = value;
             else if (key == "BearerToken") rest.bearerToken = value;
             else if (key == "IPWhitelist") rest.ipWhitelist = value;
+            else if (key == "CommandsPerMinute") rest.commandsPerMinute = atoi(value.c_str());
+            else if (key == "CommandBurst") rest.commandBurst = atoi(value.c_str());
+            else if (key == "MaxFailedAuth") rest.maxFailedAuth = atoi(value.c_str());
+            else if (key == "FailWindowSeconds") rest.failWindowSeconds = atoi(value.c_str());
+            else if (key == "BanSeconds") rest.banSeconds = atoi(value.c_str());
             return;
         }
 
@@ -220,6 +263,18 @@ private:
             else if (key == "WebhookUrl") discord.webhookUrl = value;
             else if (key == "DeathWebhookUrl") discord.deathWebhookUrl = value;
             else if (key == "Username") discord.username = value;
+            else if (key == "DeathGifPath") discord.deathGifPath = value;
+            else if (key == "DeathLines") discord.deathLines = atoi(value.c_str());
+            return;
+        }
+
+        if (section == "Events") {
+            if (key == "Enabled") events.enabled = ParseBool(value);
+            else if (key == "Url") events.url = value;
+            else if (key == "IncludeJoin") events.includeJoin = ParseBool(value);
+            else if (key == "IncludeLeave") events.includeLeave = ParseBool(value);
+            else if (key == "IncludeChat") events.includeChat = ParseBool(value);
+            else if (key == "IncludeDeath") events.includeDeath = ParseBool(value);
             return;
         }
     }

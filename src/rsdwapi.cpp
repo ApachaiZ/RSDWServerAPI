@@ -10,6 +10,7 @@
 #include "rcon/rcon_commands.h"
 #include "rcon/rcon_server.h"
 #include "runtime.h"
+#include "utils/json.h"
 #include "utils/logger.h"
 #include "utils/memory.h"
 
@@ -28,6 +29,63 @@ namespace {
 
 HttpServer* g_HttpServer = nullptr;
 Rcon::Server* g_RconServer = nullptr;
+
+// 42 annonces de mort, tirées en rotation — ton orc intérieur appréciera.
+const char* kDeathLines[] = {
+    "%s a mordu la poussière. WAAAGH !",
+    "%s vient d'offrir son crâne au trône d'os. Gork et Mork applaudissent.",
+    "%s a confondu une falaise avec un raccourci.",
+    "%s a été recyclé en engrais pour champignons à squigs.",
+    "%s est parti rejoindre la grande Waaagh céleste.",
+    "%s a tenté de discuter avec un dragon. Le dragon n'était pas d'humeur.",
+    "%s a glissé sur une peau de banane cosmique.",
+    "%s a découvert que la gravité est une opinion… mais elle a gagné.",
+    "%s s'est fait plumer plus vite qu'un squig affamé.",
+    "%s a perdu un combat contre la géométrie.",
+    "%s a confondu « potion de soin » et « potion de feu ». Résultat : croustillant.",
+    "%s a cru pouvoir nager dans la lave. Indice : non.",
+    "%s a oublié qu'il n'avait pas de parachute.",
+    "%s a énervé un poulet. Le poulet avait des amis. Beaucoup d'amis.",
+    "%s est allé vérifier si le fond du ravin était confortable.",
+    "%s a été promu au rang de « tapis ».",
+    "%s a essayé de voler. L'atterrissage était optionnel, mais douloureux.",
+    "%s a appris que les champignons rouges ne sont PAS comestibles.",
+    "%s a fait un câlin à un cactus géant.",
+    "%s a été victime de son propre plan génial.",
+    "%s a rencontré le mur. Le mur a gagné aux points.",
+    "%s a tenté le moonwalk sur un fil de lave. 10/10 pour l'effort.",
+    "%s a été transformé en confettis. La fête est annulée.",
+    "%s a voulu caresser le dragon. Le dragon a caressé plus fort.",
+    "%s a découvert la zone interdite. La zone l'a découvert aussi.",
+    "%s est parti chercher du bois. Le bois est venu le chercher.",
+    "%s a fait une sieste dans un nid de wyvernes.",
+    "%s a trouvé un trésor. Le trésor avait un gardien. Le gardien avait faim.",
+    "%s a confondu « esquiver » et « foncer dedans ».",
+    "%s a signé un pacte avec la gravité : il a tout perdu.",
+    "%s a été éjecté du groupe « Vivants ».",
+    "%s a tenté un triple salto au-dessus du précipice. Les juges notent : 0.",
+    "%s a réveillé un troll. Grave erreur.",
+    "%s a voulu jouer au dresseur de squigs. Le squig a voulu jouer aussi.",
+    "%s a perdu au jeu de « qui cligne en premier » face à un basilic.",
+    "%s a découvert que les runes explosives s'activent AUSSI en les léchant.",
+    "%s est parti en randonnée. La randonnée est partie sans lui.",
+    "%s a essayé de marchander avec un squelette. Le squelette a pris sa vie en pourboire.",
+    "%s a tenté le saut de la foi. La foi n'a pas assuré.",
+    "%s a été adopté par une plante carnivore. Pour toujours.",
+    "%s a perdu un duel d'insultes contre un gobelin. Le gobelin n'a pas accepté sa défaite.",
+    "%s a été convoqué au grand banquet des ancêtres. En plat principal.",
+};
+
+std::string ComicDeathLine(const std::string& name, const std::string& where) {
+    static std::atomic<int> counter{0};
+    int index = counter.fetch_add(1) % 42;
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer), kDeathLines[index], name.c_str());
+    std::string line = ":skull: ";
+    line += buffer;
+    if (!where.empty()) line += " — lieu : `" + where + "`";
+    return line;
+}
 std::thread* g_InitThread = nullptr;
 std::atomic<bool> g_Shutdown{false};
 std::atomic<bool> g_StoppedCleanly{false};
@@ -138,13 +196,24 @@ void InitThread() {
                 DomChat::AddListener([](const DomChat::Message& message) {
                     std::string sender = message.senderName.empty() ? "Unknown" : message.senderName;
                     Discord::Post(Discord::Channel::Chat, "**" + sender + "**: " + message.body);
+                    if (g_Config.events.enabled && g_Config.events.includeChat) {
+                        std::string payload = "{\"type\":\"chat\",\"player\":\"" +
+                                              Json::Escape(sender) + "\",\"message\":\"" +
+                                              Json::Escape(message.body) + "\"}";
+                        Discord::PostEvent(payload);
+                    }
                 });
             }
+        }
+
+        if (g_Config.events.enabled) {
+            Discord::StartEvents(g_Config.events.url);
         }
 
         DomBans::Load();
 
         std::map<std::string, bool> wasDead;
+        std::map<std::string, bool> wasPresent;
         std::map<std::string, std::chrono::steady_clock::time_point> deathPosted;
         std::mutex deathMutex;
 
@@ -158,8 +227,13 @@ void InitThread() {
             }
             LogMessage("Deaths: " + name + " died (est mort)" + (where.empty() ? "" : " at " + where));
             if (Discord::IsEnabled(Discord::Channel::Deaths)) {
-                Discord::Post(Discord::Channel::Deaths,
-                              ":skull: **" + name + "** died" + (where.empty() ? "" : " at `" + where + "`"));
+                Discord::PostDeath(ComicDeathLine(name, where), g_Config.discord.deathGifPath);
+            }
+            if (g_Config.events.enabled && g_Config.events.includeDeath) {
+                std::string payload = "{\"type\":\"death\",\"player\":\"" +
+                                      Json::Escape(name) + "\",\"location\":\"" +
+                                      Json::Escape(where) + "\"}";
+                Discord::PostEvent(payload);
             }
         };
 
@@ -197,8 +271,11 @@ void InitThread() {
             DomChat::Poll();
 
             std::map<std::string, bool> nowDead;
+            std::map<std::string, bool> nowPresent;
             for (const DomEngine::PlayerInfo& player : DomEngine::g_Engine->GetAllPlayers()) {
-                if (player.uniqueNetId.empty() || !player.hasHealth) continue;
+                if (player.uniqueNetId.empty()) continue;
+                nowPresent[player.uniqueNetId] = true;
+                if (!player.hasHealth) continue;
                 nowDead[player.uniqueNetId] = player.isDead;
 
                 auto previous = wasDead.find(player.uniqueNetId);
@@ -211,6 +288,24 @@ void InitThread() {
                 reportDeath(player.uniqueNetId, name, where);
             }
             wasDead.swap(nowDead);
+
+            if (g_Config.events.enabled) {
+                std::string lastLeft;
+                for (const auto& entry : wasPresent) {
+                    const std::string& netId = entry.first;
+                    if (entry.second && nowPresent.find(netId) == nowPresent.end()) {
+                        lastLeft = netId;
+                        Discord::PostEvent("{\"type\":\"leave\",\"netId\":\"" +
+                                           Json::Escape(netId) + "\"}");
+                    }
+                    if (!entry.second && nowPresent.find(netId) != nowPresent.end()) {
+                        Discord::PostEvent("{\"type\":\"join\",\"netId\":\"" +
+                                           Json::Escape(netId) + "\"}");
+                    }
+                }
+                (void)lastLeft;
+            }
+            wasPresent.swap(nowPresent);
         }
     } else if (!g_Shutdown) {
         LogMessage(

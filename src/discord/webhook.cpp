@@ -14,8 +14,10 @@ namespace Discord {
 
 namespace {
 
-bool UrlIsSafe(const std::string& url) {
-    if (url.rfind("https://", 0) != 0) return false;
+bool UrlIsSafe(const std::string& url, bool allowHttp) {
+    if (url.rfind("https://", 0) != 0 && !(allowHttp && url.rfind("http://", 0) == 0)) {
+        return false;
+    }
     for (char c : url) {
         if (c == '\'' || c == '"' || c == '`' || c == '$' || c == ';' || c == '|' ||
             c == '&' || c == '<' || c == '>' || c == '\\' || c == '\n' || c == '\r') {
@@ -25,7 +27,42 @@ bool UrlIsSafe(const std::string& url) {
     return true;
 }
 
-// I need to add embed support, just temporary chat until I get around to it.
+bool PathIsSafe(const std::string& path) {
+    for (char c : path) {
+        if (c == '\'' || c == '"' || c == '`' || c == '$' || c == ';' || c == '|' ||
+            c == '&' || c == '<' || c == '>' || c == '\\' || c == '\n' || c == '\r') {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string ShellQuote(const std::string& value) {
+    std::string quoted = "'";
+    for (char c : value) {
+        if (c == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted += c;
+        }
+    }
+    quoted += "'";
+    return quoted;
+}
+
+void RunCurl(const std::string& command) {
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        LogMessage("Discord: could not run curl");
+        return;
+    }
+    pclose(pipe);
+}
+
+struct Item {
+    std::string content;
+    std::string gifPath;
+};
 
 struct Sender {
     explicit Sender(const char* senderName) : name(senderName) {}
@@ -39,53 +76,44 @@ struct Sender {
 
     std::mutex mutex;
     std::condition_variable signal;
-    std::deque<std::string> queue;
+    std::deque<Item> queue;
 
-    void Send(const std::string& content) {
+    void Send(const Item& item) {
         std::string payload = "{\"username\":\"" + Json::Escape(username) +
-                              "\",\"content\":\"" + Json::Escape(content) +
+                              "\",\"content\":\"" + Json::Escape(item.content) +
                               "\",\"allowed_mentions\":{\"parse\":[]}}";
 
-        std::string quoted = "'";
-        for (char c : payload) {
-            if (c == '\'') {
-                quoted += "'\\''";
-            } else {
-                quoted += c;
-            }
-        }
-        quoted += "'";
-
-        std::string command = "curl -s -o /dev/null -m 10 -X POST -H 'Content-Type: application/json' -d " +
-                              quoted + " '" + url + "'";
-
-        FILE* pipe = popen(command.c_str(), "r");
-        if (!pipe) {
-            LogMessage("Discord: could not run curl");
+        if (item.gifPath.empty()) {
+            std::string command = "curl -s -o /dev/null -m 10 -X POST "
+                                  "-H 'Content-Type: application/json' -d " +
+                                  ShellQuote(payload) + " '" + url + "'";
+            RunCurl(command);
             return;
         }
-        pclose(pipe);
+
+        // Discord multipart: JSON payload + GIF attachment.
+        std::string command = "curl -s -o /dev/null -m 15 -X POST " +
+                              std::string("-F ") + ShellQuote("payload_json=" + payload) +
+                              " -F " + ShellQuote("file=@" + item.gifPath + ";type=image/gif") +
+                              " '" + url + "'";
+        RunCurl(command);
     }
 
     void Run() {
         while (running) {
-            std::string batch;
+            Item item;
             {
                 std::unique_lock<std::mutex> lock(mutex);
                 signal.wait_for(lock, std::chrono::seconds(2),
                                 [this] { return !queue.empty() || !running; });
                 if (!running && queue.empty()) return;
+                if (queue.empty()) continue;
 
-                while (!queue.empty()) {
-                    const std::string& next = queue.front();
-                    if (!batch.empty() && batch.size() + next.size() + 1 > 1900) break;
-                    if (!batch.empty()) batch += "\n";
-                    batch += next;
-                    queue.pop_front();
-                }
+                item = queue.front();
+                queue.pop_front();
             }
 
-            if (!batch.empty()) Send(batch);
+            Send(item);
 
             for (int i = 0; i < 10 && running; i++) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -93,12 +121,13 @@ struct Sender {
         }
     }
 
-    void Start(const std::string& webhookUrl, const std::string& webhookUsername) {
+    void Start(const std::string& webhookUrl, const std::string& webhookUsername,
+               bool allowHttp) {
         if (enabled) return;
         if (webhookUrl.empty()) return;
 
-        if (!UrlIsSafe(webhookUrl)) {
-            LogMessage("Discord: " + name + " webhook rejected, it must be an https URL with no shell characters");
+        if (!UrlIsSafe(webhookUrl, allowHttp)) {
+            LogMessage("Discord: " + name + " webhook rejected, it must be a safe http(s) URL");
             return;
         }
 
@@ -125,18 +154,23 @@ struct Sender {
         enabled = false;
     }
 
-    void Post(const std::string& line) {
+    void Post(const std::string& line, const std::string& gifPath = "") {
         if (!enabled || line.empty()) return;
+        if (!gifPath.empty() && !PathIsSafe(gifPath)) {
+            LogMessage("Discord: " + name + " GIF path rejected (unsafe characters)");
+            return;
+        }
 
         std::lock_guard<std::mutex> lock(mutex);
         if (queue.size() >= 200) queue.pop_front();
-        queue.push_back(line);
+        queue.push_back({line, gifPath});
         signal.notify_all();
     }
 };
 
 Sender g_Chat{"chat"};
 Sender g_Deaths{"death"};
+Sender g_Events{"events"};
 
 Sender& Get(Channel channel) {
     return channel == Channel::Deaths ? g_Deaths : g_Chat;
@@ -147,16 +181,29 @@ Sender& Get(Channel channel) {
 bool IsEnabled(Channel channel) { return Get(channel).enabled; }
 
 void Start(Channel channel, const std::string& webhookUrl, const std::string& username) {
-    Get(channel).Start(webhookUrl, username);
+    Get(channel).Start(webhookUrl, username, /*allowHttp=*/false);
+}
+
+void StartEvents(const std::string& url) {
+    g_Events.Start(url, "", /*allowHttp=*/true);
 }
 
 void Stop() {
     g_Chat.Stop();
     g_Deaths.Stop();
+    g_Events.Stop();
 }
 
 void Post(Channel channel, const std::string& line) {
     Get(channel).Post(line);
+}
+
+void PostDeath(const std::string& line, const std::string& gifPath) {
+    g_Deaths.Post(line, gifPath);
+}
+
+void PostEvent(const std::string& jsonLine) {
+    g_Events.Post(jsonLine);
 }
 
 }
